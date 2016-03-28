@@ -22,7 +22,7 @@ cd `dirname "$0"`				  # connect to root
 VERSION=`cat share/VERSION.txt`
 
 function usage {
-  echo "Usage: $0 {test|dist|sign|clean|docker}"
+  echo "Usage: $0 {test|dist|sign|clean|docker|rat}"
   exit 1
 }
 
@@ -84,6 +84,7 @@ case "$target" in
         mkdir -p build
 
         SRC_DIR=avro-src-$VERSION
+        DOC_DIR=avro-doc-$VERSION
 
 	rm -rf build/${SRC_DIR}
 	svn export --force . build/${SRC_DIR}
@@ -96,8 +97,10 @@ case "$target" in
 
 	# build lang-specific artifacts
         
-	(cd lang/java; mvn package -DskipTests -Dhadoop.version=1; rm -rf mapred/target/classes/;
-	  mvn -P dist package -DskipTests -Davro.version=$VERSION javadoc:aggregate) 
+	(cd lang/java; mvn package -DskipTests -Dhadoop.version=1;
+	  rm -rf mapred/target/{classes,test-classes}/;
+	  rm -rf trevni/avro/target/{classes,test-classes}/;
+	  mvn -P dist package -DskipTests -Davro.version=$VERSION javadoc:aggregate)
         (cd lang/java/trevni/doc; mvn site)
         (mvn -N -P copy-artifacts antrun:run) 
 
@@ -122,7 +125,11 @@ case "$target" in
 
 	# build docs
 	(cd doc; ant)
-	(cd build; tar czf ../dist/avro-doc-$VERSION.tar.gz avro-doc-$VERSION)
+        # add LICENSE and NOTICE for docs
+        mkdir -p build/$DOC_DIR
+        cp doc/LICENSE build/$DOC_DIR
+        cp doc/NOTICE build/$DOC_DIR
+	(cd build; tar czf ../dist/avro-doc-$VERSION.tar.gz $DOC_DIR)
 
 	cp DIST_README.txt dist/README.txt
 	;;
@@ -169,7 +176,7 @@ case "$target" in
 
 	(cd lang/php; ./build.sh clean)
 
-	(cd lang/perl; [ -f Makefile ] && make clean)
+	(cd lang/perl; [ ! -f Makefile ] || make clean)
 	;;
 
     docker)
@@ -197,8 +204,13 @@ UserSpecificDocker
           -v ${PWD}:/home/${USER_NAME}/avro \
           -w /home/${USER_NAME}/avro \
           -v ${HOME}/.m2:/home/${USER_NAME}/.m2 \
+          -v ${HOME}/.gnupg:/home/${USER_NAME}/.gnupg \
           -u ${USER_NAME} \
           avro-build-${USER_NAME}
+        ;;
+
+    rat)
+        mvn test -Dmaven.main.skip=true -Dmaven.test.skip=true -DskipTests=true -P rat -pl :avro-toplevel
         ;;
 
     *)

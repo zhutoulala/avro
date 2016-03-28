@@ -20,13 +20,13 @@ package org.apache.avro.generic;
 import java.nio.ByteBuffer;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.AbstractList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
-import java.util.WeakHashMap;
+import java.util.LinkedHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +50,8 @@ import org.apache.avro.io.parsing.ResolvingGrammarGenerator;
 import org.apache.avro.util.Utf8;
 
 import org.codehaus.jackson.JsonNode;
+
+import com.google.common.collect.MapMaker;
 
 /** Utilities for generic Java data. See {@link GenericRecordBuilder} for a convenient
  * way to build {@link GenericRecord} instances.
@@ -94,39 +96,69 @@ public class GenericData {
   /** Return the class loader that's used (by subclasses). */
   public ClassLoader getClassLoader() { return classLoader; }
 
-  public Map<String, Conversion<?>> conversions =
+  private Map<String, Conversion<?>> conversions =
       new HashMap<String, Conversion<?>>();
 
-  public Map<Class<?>, Conversion<?>> conversionsByClass =
-      new IdentityHashMap<Class<?>, Conversion<?>>();
+  private Map<Class<?>, Map<String, Conversion<?>>> conversionsByClass =
+      new IdentityHashMap<Class<?>, Map<String, Conversion<?>>>();
 
+  /**
+   * Registers the given conversion to be used when reading and writing with
+   * this data model.
+   *
+   * @param conversion a logical type Conversion.
+   */
   public void addLogicalTypeConversion(Conversion<?> conversion) {
     conversions.put(conversion.getLogicalTypeName(), conversion);
-    conversionsByClass.put(conversion.getConvertedType(), conversion);
+    Class<?> type = conversion.getConvertedType();
+    if (conversionsByClass.containsKey(type)) {
+      conversionsByClass.get(type).put(
+          conversion.getLogicalTypeName(), conversion);
+    } else {
+      Map<String, Conversion<?>> conversions = new LinkedHashMap<String, Conversion<?>>();
+      conversions.put(conversion.getLogicalTypeName(), conversion);
+      conversionsByClass.put(type, conversions);
+    }
   }
 
+  /**
+   * Returns the first conversion found for the given class.
+   *
+   * @param datumClass a Class
+   * @return the first registered conversion for the class, or null
+   */
   @SuppressWarnings("unchecked")
-  public <T> Conversion<? super T> getConversionFrom(Class<T> datumClass,
-                                                     LogicalType logicalType) {
-    Conversion<?> conversion = conversionsByClass.get(datumClass);
-    if (conversion != null &&
-        conversion.getLogicalTypeName().equals(logicalType.getName())) {
-      return (Conversion<T>) conversion;
+  public <T> Conversion<T> getConversionByClass(Class<T> datumClass) {
+    Map<String, Conversion<?>> conversions = conversionsByClass.get(datumClass);
+    if (conversions != null) {
+      return (Conversion<T>) conversions.values().iterator().next();
     }
     return null;
   }
 
+  /**
+   * Returns the conversion for the given class and logical type.
+   *
+   * @param datumClass a Class
+   * @param logicalType a LogicalType
+   * @return the conversion for the class and logical type, or null
+   */
   @SuppressWarnings("unchecked")
-  public <T> Conversion<? extends T> getConversionTo(Class<T> datumClass,
-                                                     LogicalType logicalType) {
-    Conversion<?> conversion = conversionsByClass.get(datumClass);
-    if (conversion != null &&
-        conversion.getLogicalTypeName().equals(logicalType.getName())) {
-      return (Conversion<T>) conversion;
+  public <T> Conversion<T> getConversionByClass(Class<T> datumClass,
+                                                LogicalType logicalType) {
+    Map<String, Conversion<?>> conversions = conversionsByClass.get(datumClass);
+    if (conversions != null) {
+      return (Conversion<T>) conversions.get(logicalType.getName());
     }
     return null;
   }
 
+  /**
+   * Returns the Conversion for the given logical type.
+   *
+   * @param logicalType a logical type
+   * @return the conversion for the logical type, or null
+   */
   @SuppressWarnings("unchecked")
   public Conversion<Object> getConversionFor(LogicalType logicalType) {
     if (logicalType == null) {
@@ -515,9 +547,8 @@ public class GenericData {
       buffer.append("\"");
     } else if (isBytes(datum)) {
       buffer.append("{\"bytes\": \"");
-      ByteBuffer bytes = (ByteBuffer)datum;
-      for (int i = bytes.position(); i < bytes.limit(); i++)
-        buffer.append((char)bytes.get(i));
+      ByteBuffer bytes = ((ByteBuffer) datum).duplicate();
+      writeEscapedString(StandardCharsets.ISO_8859_1.decode(bytes), buffer);
       buffer.append("\"}");
     } else if (((datum instanceof Float) &&       // quote Nan & Infinity
                 (((Float)datum).isInfinite() || ((Float)datum).isNaN()))
@@ -532,7 +563,7 @@ public class GenericData {
   }
   
   /* Adapted from http://code.google.com/p/json-simple */
-  private void writeEscapedString(String string, StringBuilder builder) {
+  private void writeEscapedString(CharSequence string, StringBuilder builder) {
     for(int i = 0; i < string.length(); i++){
       char ch = string.charAt(i);
       switch(ch){
@@ -657,15 +688,16 @@ public class GenericData {
     // this allows logical type concrete classes to overlap with supported ones
     // for example, a conversion could return a map
     if (datum != null) {
-      Conversion<?> conversion = conversionsByClass.get(datum.getClass());
-      if (conversion != null) {
-        String logicalTypeName = conversion.getLogicalTypeName();
+      Map<String, Conversion<?>> conversions = conversionsByClass.get(datum.getClass());
+      if (conversions != null) {
         List<Schema> candidates = union.getTypes();
         for (int i = 0; i < candidates.size(); i += 1) {
-          LogicalType candidateLogicalType = candidates.get(i).getLogicalType();
-          if (candidateLogicalType != null &&
-              logicalTypeName.equals(candidateLogicalType.getName())) {
-            return i;
+          LogicalType candidateType = candidates.get(i).getLogicalType();
+          if (candidateType != null) {
+            Conversion<?> conversion = conversions.get(candidateType.getName());
+            if (conversion != null) {
+              return i;
+            }
           }
         }
       }
@@ -937,7 +969,7 @@ public class GenericData {
   }
 
   private final Map<Field, Object> defaultValueCache
-    = Collections.synchronizedMap(new WeakHashMap<Field, Object>());
+    = new MapMaker().weakKeys().makeMap();
 
   /**
    * Gets the default value of the given field, if any.
@@ -1017,8 +1049,7 @@ public class GenericData {
       case DOUBLE:
         return value; // immutable
       case ENUM:
-        // Enums are immutable; shallow copy will suffice
-        return value;
+        return (T)createEnum(value.toString(), schema);
       case FIXED:
         return (T)createFixed(null, ((GenericFixed) value).bytes(), schema);
       case FLOAT:

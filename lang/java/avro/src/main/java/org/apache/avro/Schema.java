@@ -32,6 +32,7 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -93,7 +94,7 @@ public abstract class Schema extends JsonProperties {
     RECORD, ENUM, ARRAY, MAP, UNION, FIXED, STRING, BYTES,
       INT, LONG, FLOAT, DOUBLE, BOOLEAN, NULL;
     private String name;
-    private Type() { this.name = this.name().toLowerCase(); }
+    private Type() { this.name = this.name().toLowerCase(Locale.ENGLISH); }
     public String getName() { return name; }
   };
 
@@ -377,7 +378,7 @@ public abstract class Schema extends JsonProperties {
     public enum Order {
       ASCENDING, DESCENDING, IGNORE;
       private String name;
-      private Order() { this.name = this.name().toLowerCase(); }
+      private Order() { this.name = this.name().toLowerCase(Locale.ENGLISH); }
     };
 
     private final String name;    // name of the field.
@@ -749,7 +750,7 @@ public abstract class Schema extends JsonProperties {
           throw new SchemaParseException("Duplicate enum symbol: "+symbol);
     }
     public List<String> getEnumSymbols() { return symbols; }
-    public boolean hasEnumSymbol(String symbol) { 
+    public boolean hasEnumSymbol(String symbol) {
       return ordinals.containsKey(symbol); }
     public int getEnumOrdinal(String symbol) { return ordinals.get(symbol); }
     public boolean equals(Object o) {
@@ -997,9 +998,11 @@ public abstract class Schema extends JsonProperties {
     }
 
     /** Parse a schema from the provided stream.
-     * If named, the schema is added to the names known to this parser. */
+     * If named, the schema is added to the names known to this parser.
+     * The input stream stays open after the parsing. */
     public Schema parse(InputStream in) throws IOException {
-      return parse(FACTORY.createJsonParser(in));
+      return parse(FACTORY.createJsonParser(in).disable(
+              JsonParser.Feature.AUTO_CLOSE_SOURCE));
     }
 
     /** Read a schema from one or more json strings */
@@ -1030,6 +1033,7 @@ public abstract class Schema extends JsonProperties {
       } catch (JsonParseException e) {
         throw new SchemaParseException(e);
       } finally {
+        parser.close();
         validateNames.set(saved);
         VALIDATE_DEFAULTS.set(savedValidateDefaults);
       }
@@ -1266,7 +1270,7 @@ public abstract class Schema extends JsonProperties {
           Field.Order order = Field.Order.ASCENDING;
           JsonNode orderNode = field.get("order");
           if (orderNode != null)
-            order = Field.Order.valueOf(orderNode.getTextValue().toUpperCase());
+            order = Field.Order.valueOf(orderNode.getTextValue().toUpperCase(Locale.ENGLISH));
           JsonNode defaultValue = field.get("default");
           if (defaultValue != null
               && (Type.FLOAT.equals(fieldSchema.getType())

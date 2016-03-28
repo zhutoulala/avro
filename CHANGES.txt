@@ -4,6 +4,31 @@ Trunk (not yet released)
 
   INCOMPATIBLE CHANGES
 
+  NEW FEATURES
+
+  OPTIMIZATIONS
+
+  IMPROVEMENTS
+
+    AVRO-1793. Python2: Retain stack trace and original exception when failing
+    to parse schemas. Contributed by Jakob Homan (jghoman).
+
+    AVRO-1778: JavaScript: Add IPC/RPC support. (mtth)
+
+  BUG FIXES
+
+    AVRO-1493. Java: Avoid the "Turkish Locale Problem". Schema fingerprints are
+    now consistent regardless of the environment's locale.
+
+    AVRO-1799: Fix GenericRecord#toString ByteBuffer handling. (blue)
+
+    AVRO-1667: Fix parser grammar flattening for recursive cases.
+    (Zoltan Farkas via blue)
+
+Avro 1.8.0 (22 January 2016)
+
+  INCOMPATIBLE CHANGES
+
     AVRO-1334. Java: Update versions of many dependencies. (scottcarey, cutting)
 
     AVRO-997. Java: For enum values, no longer sometimes permit any
@@ -18,6 +43,9 @@ Trunk (not yet released)
     artifacts. To use with Hadoop 1, set the classifier to hadoop1.
     (tomwhite)
 
+    AVRO-1502. Java: Generated classes now implement Serializable.
+    Generated classes need to be regenerated to use this release. (cutting)
+
   NEW FEATURES
 
     AVRO-1555.  C#: Add support for RPC over HTTP. (Dmitry Kovalev via cutting)
@@ -29,10 +57,8 @@ Trunk (not yet released)
     and shortname matches when fullname matching fails.
     (Ryan Blue via cutting)
 
-    AVRO-1502. Java: Generated classes now implement Serializable. (cutting)
-
     AVRO-570. Python: Add connector for tethered mapreduce.
-    (Jeremy Lewi and Steven Willis via cutting)    
+    (Jeremy Lewi and Steven Willis via cutting)
 
     AVRO-834. Java: Data File corruption recovery tool.
     (scottcarey and tomwhite)
@@ -55,7 +81,16 @@ Trunk (not yet released)
     AVRO-1683. Add microsecond time and timestamp logical types to the
     specification. (blue)
 
+    AVRO-1672. Java: Add date/time logical types and conversions. (blue)
+
+    AVRO-1747. JS: Add Javascript IO implementation. (Matthieu Monsch via blue)
+
+    AVRO-1767. JS: Fall back to unwrapped union values. (Matthieu Monsch via blue)
+
   OPTIMIZATIONS
+
+    AVRO-1760. Java: Thread scalability problem with the use of SynchronizedMap
+    (tomwhite)
 
   IMPROVEMENTS
 
@@ -92,6 +127,16 @@ Trunk (not yet released)
 
     AVRO-1693. Ruby: Allow writing arbitrary metadata to data files.
     (Daniel Schierbeck via tomwhite)
+
+    AVRO-1692. Allow more than one logical type for a Java class. (blue via
+    tomwhite)
+
+    AVRO-1697. Ruby: Add support for the Snappy codec to the Ruby library.
+    (Daniel Schierbeck via tomwhite)
+
+    AVRO-1739. Update Avro URLs and mailing lists. (Gabor Liptak via blue)
+
+    AVRO-1765: JS: Update node.js version in docker to 4.x. (blue)
 
   BUG FIXES
 
@@ -163,6 +208,90 @@ Trunk (not yet released)
 
     AVRO-1576. TestSchemaCompatibility is platform dependant.
     (Stevo Slavic via tomwhite)
+
+    AVRO-1688. Ruby test_union(TestIO) is failing. (tomwhite)
+
+    AVRO-1673. Python 3 EnumSchema changes the order of symbols.
+    (Marcin Białoń via tomwhite)
+
+    AVRO-1491. Avro.ipc.dll not included in release zip/build file.
+    (Dmitry Kovalev via tomwhite)
+
+    AVRO-1676. Java: Do not treat enum symbols as immutable when deep copying.
+    (Mike Rodriguez via tomwhite)
+
+    AVRO-1593. C++: Use classic locale to escape control chars.
+    (Hatem Helal via blue)
+
+    AVRO-1700. C++: Fix avro_BufferStreambuf_hh__ header guard.
+    (Liu Yanbo via blue)
+
+    AVRO-1715. Java: Close files opened by the Schema parser.
+    (Pavel Safrata via blue)
+
+    AVRO-1729: Ruby: Add LICENSE and NOTICE to ruby gems. (blue)
+
+    AVRO-1732: C++: Add LICENSE and NOTICE to binary distribution. (blue)
+
+    AVRO-1733: C#: Add LICENSE and NOTICE to binary distribution. (blue)
+
+    AVRO-1755. Java: avro-mapred should not depend on avro-ipc:test.
+    (Clément MAHTIEU via tomwhite)
+
+    AVRO-1754. C++ ValiditingDecoder handles null incorrectly. (John McClean via thiru)
+
+    AVRO-1731: C: Add LICENSE and NOTICE to binary distribution. (blue)
+
+    AVRO-1735: Perl: Add LICENSE and NOTICE to distribution. (blue)
+
+    AVRO-1736: PHP: Add LICENSE and NOTICE to distribution. (blue)
+
+    AVRO-1730: Python 2, 3: Add LICENSE and NOTICE to distribution. (blue)
+
+    AVRO-1722: Update root LICENSE.txt and NOTICE.txt. (blue)
+
+    AVRO-1584: Java: Escape characters not allowed in JSON in toString. (blue)
+
+    AVRO-1728: Java: Add LICENSE and NOTICE files to jars. (blue)
+
+    AVRO-1572: C: Fix EOF handling on data files that are multiples of
+    4096 bytes. (Ben Walsh via martinkl)
+
+    AVRO-1617: C: Fix equality checking of record schemas. (Skye
+    Wanderman-Milne via martinkl)
+
+    AVRO-1560: C: Fix build for custom libsnappy location. (Ujjwal via martinkl)
+
+    AVRO-1770. Python 3 overwrites custom README.txt (blue via tomwhite)
+
+    AVRO-1771. Add LICENSE and NOTICE to avro-doc artifact. (blue via tomwhite)
+
+    AVRO-1772. Ruby: load error in rubygem when loading schema normalization.
+    (blue and martinkl via tomwhite)
+
+    AVRO-1725. Docs: clarify restrictions on enum symbols. (martinkl)
+
+    AVRO-1779. Avro docs convenience artifact missing LICENSE/NOTICE.
+    (blue via tomwhite)
+
+    AVRO-1781. Java: Fix Schema.parse thread safety bug introduced by logical
+    types. (blue)
+
+    AVRO-1782. Ruby: Fix unit test failures in new versions of Ruby. (martinkl)
+
+    AVRO-1769. C: Use operating system's libjansson instead of bundling
+    it with Avro. (Magnus Edenhill via martinkl)
+
+    AVRO-1691. C: Allow schemas consisting only of a primitive type.
+    (Magnus Edenhill via martinkl)
+
+    AVRO-1663. C: Fix handling of namespaces for enum and fixed types.
+    (martinkl)
+
+    AVRO-1775. Ruby: Use test-unit gem for running tests. (martinkl)
+
+    AVRO-1783. Ruby: Ensure correct binary encoding for byte strings.
+    (martinkl)
 
 Avro 1.7.7 (23 July 2014)
 
