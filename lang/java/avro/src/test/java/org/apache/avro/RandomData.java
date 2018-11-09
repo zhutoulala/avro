@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,11 +19,7 @@ package org.apache.avro;
 
 import java.io.File;
 import java.nio.ByteBuffer;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
+import java.util.*;
 
 import org.apache.avro.file.CodecFactory;
 import org.apache.avro.file.DataFileWriter;
@@ -48,7 +44,7 @@ public class RandomData implements Iterable<Object> {
     this.seed = seed;
     this.count = count;
   }
-  
+
   public Iterator<Object> iterator() {
     return new Iterator<Object>() {
       private int n;
@@ -61,7 +57,7 @@ public class RandomData implements Iterable<Object> {
       public void remove() { throw new UnsupportedOperationException(); }
     };
   }
-  
+
   @SuppressWarnings(value="unchecked")
   private static Object generate(Schema schema, Random random, int d) {
     switch (schema.getType()) {
@@ -83,7 +79,7 @@ public class RandomData implements Iterable<Object> {
       return array;
     case MAP:
       length = (random.nextInt(5)+2)-d;
-      Map<Object,Object> map = new HashMap<Object,Object>(length<=0?0:length);
+      Map<Object,Object> map = new HashMap<>(length <= 0 ? 0 : length);
       for (int i = 0; i < length; i++) {
         map.put(randomUtf8(random, 40),
                 generate(schema.getValueType(), random, d+1));
@@ -130,7 +126,7 @@ public class RandomData implements Iterable<Object> {
     }
     Schema sch = Schema.parse(new File(args[0]));
     DataFileWriter<Object> writer =
-      new DataFileWriter<Object>(new GenericDatumWriter<Object>());
+      new DataFileWriter<>(new GenericDatumWriter<>());
     writer.setCodec(CodecFactory.fromString(args.length >= 4 ? args[3] : "null"));
     writer.create(sch, new File(args[1]));
     try {

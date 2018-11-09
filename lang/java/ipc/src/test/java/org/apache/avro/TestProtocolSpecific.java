@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -37,11 +37,9 @@ import org.apache.avro.test.Kind;
 import org.apache.avro.test.MD5;
 import org.apache.avro.test.TestError;
 import org.apache.avro.test.TestRecord;
-import org.junit.After;
 import org.junit.Test;
 import org.junit.Before;
 import org.junit.AfterClass;
-import static org.junit.Assert.assertTrue;
 
 import static org.junit.Assert.*;
 
@@ -53,17 +51,13 @@ import java.io.LineNumberReader;
 import java.net.InetSocketAddress;
 import java.net.URL;
 import java.nio.ByteBuffer;
-import java.util.Random;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.HashSet;
+import java.nio.file.Files;
+import java.util.*;
 
 
 public class TestProtocolSpecific {
 
   protected static final int REPEATING = -1;
-  protected static final File SERVER_PORTS_DIR
-  = new File(System.getProperty("test.dir", "/tmp")+"/server-ports/");
 
   public static int ackCount;
 
@@ -95,23 +89,23 @@ public class TestProtocolSpecific {
     responder = new SpecificResponder(Simple.class, new TestImpl());
     server = createServer(responder);
     server.start();
-    
+
     client = createTransceiver();
     SpecificRequestor req = new SpecificRequestor(Simple.class, client);
     addRpcPlugins(req);
     proxy = SpecificRequestor.getClient(Simple.class, (SpecificRequestor)req);
-    
+
     monitor = new HandshakeMonitor();
     responder.addRPCPlugin(monitor);
   }
-  
+
   public void addRpcPlugins(Requestor requestor){}
-  
+
   public Server createServer(Responder testResponder) throws Exception{
     return server = new SocketServer(testResponder,
-                              new InetSocketAddress(0));   
+                              new InetSocketAddress(0));
   }
-  
+
   public Transceiver createTransceiver() throws Exception{
     return new SocketTransceiver(new InetSocketAddress(server.getPort()));
   }
@@ -190,7 +184,7 @@ public class TestProtocolSpecific {
       error = e;
     }
     assertNotNull(error);
-    assertEquals("an error", error.getMessage$().toString());
+    assertEquals("an error", error.getMessage$());
   }
 
   @Test
@@ -218,14 +212,14 @@ public class TestProtocolSpecific {
     try { Thread.sleep(100); } catch (InterruptedException e) {}
     assertEquals(2, ackCount);
   }
-  
+
   @Test
   public void testRepeatedAccess() throws Exception {
     for (int x = 0; x < 1000; x++) {
       proxy.hello("hi!");
     }
   }
-  
+
   @Test(expected = Exception.class)
   public void testConnectionRefusedOneWay() throws IOException {
     Transceiver client = new HttpTransceiver(new URL("http://localhost:4444"));
@@ -240,7 +234,7 @@ public class TestProtocolSpecific {
       argument to check that schema is sent to parse request. */
   public void testParamVariation() throws Exception {
     Protocol protocol = new Protocol("Simple", "org.apache.avro.test");
-    List<Schema.Field> fields = new ArrayList<Schema.Field>();
+    List<Schema.Field> fields = new ArrayList<>();
     fields.add(new Schema.Field("extra", Schema.create(Schema.Type.BOOLEAN),
                    null, null));
     fields.add(new Schema.Field("greeting", Schema.create(Schema.Type.STRING),
@@ -250,7 +244,7 @@ public class TestProtocolSpecific {
                              null /* doc */,
                              Schema.createRecord(fields),
                              Schema.create(Schema.Type.STRING),
-                             Schema.createUnion(new ArrayList<Schema>()));
+                             Schema.createUnion(new ArrayList<>()));
     protocol.getMessages().put("hello", message);
     Transceiver t = createTransceiver();
     try {
@@ -277,12 +271,12 @@ public class TestProtocolSpecific {
     server.close();
     server = null;
   }
-  
+
   public class HandshakeMonitor extends RPCPlugin{
-    
+
     private int handshakes;
-    private HashSet<String> seenProtocols = new HashSet<String>();
-    
+    private HashSet<String> seenProtocols = new HashSet<>();
+
     @Override
     public void serverConnecting(RPCContext context) {
       handshakes++;
@@ -299,7 +293,7 @@ public class TestProtocolSpecific {
         seenProtocols.add(clientProtocol);
       }
     }
-    
+
     public void assertHandshake(){
       int expected = getExpectedHandshakeCount();
       if(expected != REPEATING){
@@ -307,30 +301,39 @@ public class TestProtocolSpecific {
       }
     }
   }
-  
+
   protected int getExpectedHandshakeCount() {
    return 3;
   }
 
   public static class InteropTest {
 
-  @Test
+    private static File SERVER_PORTS_DIR;
+    static {
+      try {
+        SERVER_PORTS_DIR = Files.createTempDirectory(TestProtocolSpecific.class.getSimpleName()).toFile();
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+
+    @Test
     public void testClient() throws Exception {
-      for (File f : SERVER_PORTS_DIR.listFiles()) {
+      for (File f : Objects.requireNonNull(SERVER_PORTS_DIR.listFiles())) {
         LineNumberReader reader = new LineNumberReader(new FileReader(f));
         int port = Integer.parseInt(reader.readLine());
-        System.out.println("Validating java client to "+
-            f.getName()+" - " + port);
+        System.out.println("Validating java client to " +
+                f.getName() + " - " + port);
         Transceiver client = new SocketTransceiver(
-            new InetSocketAddress("localhost", port));
-        proxy = (Simple)SpecificRequestor.getClient(Simple.class, client);
+                new InetSocketAddress("localhost", port));
+        proxy = SpecificRequestor.getClient(Simple.class, client);
         TestProtocolSpecific proto = new TestProtocolSpecific();
         proto.testHello();
         proto.testEcho();
         proto.testEchoBytes();
         proto.testError();
-        System.out.println("Done! Validation java client to "+
-            f.getName()+" - " + port);
+        System.out.println("Done! Validation java client to " +
+                f.getName() + " - " + port);
       }
     }
 
@@ -339,8 +342,8 @@ public class TestProtocolSpecific {
      */
     public static void main(String[] args) throws Exception {
       SocketServer server = new SocketServer(
-          new SpecificResponder(Simple.class, new TestImpl()),
-          new InetSocketAddress(0));
+              new SpecificResponder(Simple.class, new TestImpl()),
+              new InetSocketAddress(0));
       server.start();
       File portFile = new File(SERVER_PORTS_DIR, "java-port");
       FileWriter w = new FileWriter(portFile);

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,7 +23,7 @@ import java.io.IOException;
 import java.util.Arrays;
 
 import org.apache.avro.compiler.specific.SpecificCompiler;
-
+import org.apache.avro.compiler.specific.SpecificCompiler.DateTimeLogicalTypeImplementation;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.project.MavenProject;
@@ -76,15 +76,15 @@ public abstract class AbstractAvroMojo extends AbstractMojo {
    * A list of files or directories that should be compiled first thus making
    * them importable by subsequently compiled schemas. Note that imported files
    * should not reference each other.
-   * @parameter 
+   * @parameter
    */
   protected String[] imports;
-  
+
   /**
    * A set of Ant-like exclusion patterns used to prevent certain files from
    * being processed. By default, this set is empty such that no files are
    * excluded.
-   * 
+   *
    * @parameter
    */
   protected String[] excludes = new String[0];
@@ -93,7 +93,7 @@ public abstract class AbstractAvroMojo extends AbstractMojo {
    * A set of Ant-like exclusion patterns used to prevent certain files from
    * being processed. By default, this set is empty such that no files are
    * excluded.
-   * 
+   *
    * @parameter
    */
   protected String[] testExcludes = new String[0];
@@ -123,8 +123,23 @@ public abstract class AbstractAvroMojo extends AbstractMojo {
   protected boolean createSetters;
 
   /**
+   * Determines whether or not to use Java classes for decimal types
+   *
+   * @parameter default-value="false"
+   */
+  protected boolean enableDecimalLogicalType;
+
+  /**
+   * Determines which type of classes to generate for date/time related logical types. Either 'joda' or 'jsr310'.
+   * Defaults to joda for backwards compatibility reasons.
+   *
+   * @parameter default-value="joda"
+   */
+  protected String dateTimeLogicalTypeImplementation = DateTimeLogicalTypeImplementation.JODA.name().toLowerCase();
+
+  /**
    * The current Maven project.
-   * 
+   *
    * @parameter default-value="${project}"
    * @readonly
    * @required
@@ -164,11 +179,11 @@ public abstract class AbstractAvroMojo extends AbstractMojo {
           sourceDirectory.getAbsolutePath(), excludes, getIncludes());
       compileFiles(includedFiles, sourceDirectory, outputDirectory);
     }
-    
+
     if (hasImports || hasSourceDir) {
       project.addCompileSourceRoot(outputDirectory.getAbsolutePath());
     }
-    
+
     if (hasTestDir) {
       String[] includedFiles = getIncludedFiles(
           testSourceDirectory.getAbsolutePath(), testExcludes,
@@ -184,7 +199,7 @@ public abstract class AbstractAvroMojo extends AbstractMojo {
     FileSet fs = new FileSet();
     fs.setDirectory(absPath);
     fs.setFollowSymlinks(false);
-    
+
     //exclude imports directory since it has already been compiled.
     if (imports != null) {
       String importExclude = null;
@@ -227,6 +242,22 @@ public abstract class AbstractAvroMojo extends AbstractMojo {
       return SpecificCompiler.FieldVisibility.valueOf(upper);
     } catch (IllegalArgumentException e) {
       return SpecificCompiler.FieldVisibility.PUBLIC_DEPRECATED;
+    }
+  }
+
+  protected DateTimeLogicalTypeImplementation getDateTimeLogicalTypeImplementation() {
+    try {
+      if (this.dateTimeLogicalTypeImplementation == null || this.dateTimeLogicalTypeImplementation.isEmpty()) {
+        return DateTimeLogicalTypeImplementation.DEFAULT;
+      } else {
+        String upper = String.valueOf(this.dateTimeLogicalTypeImplementation).trim().toUpperCase();
+        return DateTimeLogicalTypeImplementation.valueOf(upper);
+      }
+    } catch (IllegalArgumentException e) {
+      getLog().warn("Unknown value '" + this.dateTimeLogicalTypeImplementation
+        + "' for property dateTimeLogicalTypeImplementation; using '"
+        + DateTimeLogicalTypeImplementation.DEFAULT.name().toLowerCase() + "' instead");
+      return DateTimeLogicalTypeImplementation.DEFAULT;
     }
   }
 

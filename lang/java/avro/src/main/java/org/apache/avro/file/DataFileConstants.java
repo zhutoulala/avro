@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -30,7 +30,7 @@ public class DataFileConstants {
   };
   public static final long FOOTER_BLOCK = -1;
   public static final int SYNC_SIZE = 16;
-  public static final int DEFAULT_SYNC_INTERVAL = 4000*SYNC_SIZE; 
+  public static final int DEFAULT_SYNC_INTERVAL = 4000*SYNC_SIZE;
 
   public static final String SCHEMA = "avro.schema";
   public static final String CODEC = "avro.codec";
@@ -39,5 +39,6 @@ public class DataFileConstants {
   public static final String SNAPPY_CODEC = "snappy";
   public static final String BZIP2_CODEC = "bzip2";
   public static final String XZ_CODEC = "xz";
+  public static final String ZSTANDARD_CODEC = "zstandard";
 
 }

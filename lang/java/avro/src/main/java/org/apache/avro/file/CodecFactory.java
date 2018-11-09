@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -65,14 +65,19 @@ public abstract class CodecFactory {
     return new BZip2Codec.Option();
   }
 
+  /** zstandard codec.*/
+  public static CodecFactory zstandardCodec() {
+    return new ZstandardCodec.Option();
+  }
+
   /** Creates internal Codec. */
   protected abstract Codec createInstance();
-  
-  /** Mapping of string names (stored as metas) and codecs. 
+
+  /** Mapping of string names (stored as metas) and codecs.
    * Note that currently options (like compression level)
    * are not recoverable. */
-  private static final Map<String, CodecFactory> REGISTERED = 
-    new HashMap<String, CodecFactory>();
+  private static final Map<String, CodecFactory> REGISTERED =
+    new HashMap<>();
 
   public static final int DEFAULT_DEFLATE_LEVEL = Deflater.DEFAULT_COMPRESSION;
   public static final int DEFAULT_XZ_LEVEL = LZMA2Options.PRESET_DEFAULT;
@@ -83,17 +88,19 @@ public abstract class CodecFactory {
     addCodec("snappy", snappyCodec());
     addCodec("bzip2", bzip2Codec());
     addCodec("xz", xzCodec(DEFAULT_XZ_LEVEL));
+    addCodec("zstandard", zstandardCodec());
   }
 
   /** Maps a codec name into a CodecFactory.
    *
-   * Currently there are five codecs registered by default:
+   * Currently there are six codecs registered by default:
    * <ul>
    *   <li>{@code null}</li>
    *   <li>{@code deflate}</li>
    *   <li>{@code snappy}</li>
    *   <li>{@code bzip2}</li>
    *   <li>{@code xz}</li>
+   *   <li>{@code zstandard}</li>
    * </ul>
    */
   public static CodecFactory fromString(String s) {
@@ -103,7 +110,7 @@ public abstract class CodecFactory {
     }
     return o;
   }
-  
+
 
 
   /** Adds a new codec implementation.  If name already had
@@ -111,11 +118,11 @@ public abstract class CodecFactory {
   public static CodecFactory addCodec(String name, CodecFactory c) {
     return REGISTERED.put(name, c);
   }
-  
+
   @Override
   public String toString() {
     Codec instance = this.createInstance();
     return instance.toString();
   }
-  
+
 }

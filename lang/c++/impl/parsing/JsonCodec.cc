@@ -54,6 +54,7 @@ using std::istringstream;
 
 using avro::json::JsonParser;
 using avro::json::JsonGenerator;
+using avro::json::JsonNullFormatter;
 
 class JsonGrammarGenerator : public ValidatingGrammarGenerator {
     ProductionPtr doGenerate(const NodePtr& n,
@@ -105,7 +106,7 @@ ProductionPtr JsonGrammarGenerator::doGenerate(const NodePtr& n,
             reverse(result->begin(), result->end());
 
             m[n] = result;
-            return result;
+            return make_shared<Production>(1, Symbol::indirect(result));
         }
     case AVRO_ENUM:
         {
@@ -362,6 +363,7 @@ template <typename P>
 size_t JsonDecoder<P>::arrayStart()
 {
     parser_.advance(Symbol::sArrayStart);
+    parser_.pushRepeatCount(0);
     expect(JsonParser::tkArrayStart);
     return arrayNext();
 }
@@ -376,7 +378,7 @@ size_t JsonDecoder<P>::arrayNext()
         parser_.advance(Symbol::sArrayEnd);
         return 0;
     }
-    parser_.setRepeatCount(1);
+    parser_.nextRepeatCount(1);
     return 1;
 }
 
@@ -418,6 +420,7 @@ template <typename P>
 size_t JsonDecoder<P>::mapStart()
 {
     parser_.advance(Symbol::sMapStart);
+    parser_.pushRepeatCount(0);
     expect(JsonParser::tkObjectStart);
     return mapNext();
 }
@@ -432,7 +435,7 @@ size_t JsonDecoder<P>::mapNext()
         parser_.advance(Symbol::sMapEnd);
         return 0;
     }
-    parser_.setRepeatCount(1);
+    parser_.nextRepeatCount(1);
     return 1;
 }
 
@@ -464,11 +467,11 @@ size_t JsonDecoder<P>::decodeUnionIndex()
     return result;
 }
 
-
+template<typename F = JsonNullFormatter>
 class JsonHandler {
-    JsonGenerator& generator_;
+    JsonGenerator<F>& generator_;
 public:
-    JsonHandler(JsonGenerator& g) : generator_(g) { }
+    JsonHandler(JsonGenerator<F>& g) : generator_(g) { }
     size_t handle(const Symbol& s) {
         switch (s.kind()) {
         case Symbol::sRecordStart:
@@ -487,10 +490,10 @@ public:
     }
 };
 
-template <typename P>
+template <typename P, typename F = JsonNullFormatter>
 class JsonEncoder : public Encoder {
-    JsonGenerator out_;
-    JsonHandler handler_;
+    JsonGenerator<F> out_;
+    JsonHandler<F> handler_;
     P parser_;
 
     void init(OutputStream& os);
@@ -518,49 +521,49 @@ public:
         parser_(JsonGrammarGenerator().generate(schema), NULL, handler_) { }
 };
 
-template<typename P>
-void JsonEncoder<P>::init(OutputStream& os)
+template<typename P, typename F>
+void JsonEncoder<P, F>::init(OutputStream& os)
 {
     out_.init(os);
 }
 
-template<typename P>
-void JsonEncoder<P>::flush()
+template<typename P, typename F>
+void JsonEncoder<P, F>::flush()
 {
     parser_.processImplicitActions();
     out_.flush();
 }
 
-template<typename P>
-void JsonEncoder<P>::encodeNull()
+template<typename P, typename F>
+void JsonEncoder<P, F>::encodeNull()
 {
     parser_.advance(Symbol::sNull);
     out_.encodeNull();
 }
 
-template<typename P>
-void JsonEncoder<P>::encodeBool(bool b)
+template<typename P, typename F>
+void JsonEncoder<P, F>::encodeBool(bool b)
 {
     parser_.advance(Symbol::sBool);
     out_.encodeBool(b);
 }
 
-template<typename P>
-void JsonEncoder<P>::encodeInt(int32_t i)
+template<typename P, typename F>
+void JsonEncoder<P, F>::encodeInt(int32_t i)
 {
     parser_.advance(Symbol::sInt);
     out_.encodeNumber(i);
 }
 
-template<typename P>
-void JsonEncoder<P>::encodeLong(int64_t l)
+template<typename P, typename F>
+void JsonEncoder<P, F>::encodeLong(int64_t l)
 {
     parser_.advance(Symbol::sLong);
     out_.encodeNumber(l);
 }
 
-template<typename P>
-void JsonEncoder<P>::encodeFloat(float f)
+template<typename P, typename F>
+void JsonEncoder<P, F>::encodeFloat(float f)
 {
     parser_.advance(Symbol::sFloat);
     if (f == std::numeric_limits<float>::infinity()) {
@@ -574,8 +577,8 @@ void JsonEncoder<P>::encodeFloat(float f)
     }
 }
 
-template<typename P>
-void JsonEncoder<P>::encodeDouble(double d)
+template<typename P, typename F>
+void JsonEncoder<P, F>::encodeDouble(double d)
 {
     parser_.advance(Symbol::sDouble);
     if (d == std::numeric_limits<double>::infinity()) {
@@ -589,74 +592,76 @@ void JsonEncoder<P>::encodeDouble(double d)
     }
 }
 
-template<typename P>
-void JsonEncoder<P>::encodeString(const std::string& s)
+template<typename P, typename F>
+void JsonEncoder<P, F>::encodeString(const std::string& s)
 {
     parser_.advance(Symbol::sString);
     out_.encodeString(s);
 }
 
-template<typename P>
-void JsonEncoder<P>::encodeBytes(const uint8_t *bytes, size_t len)
+template<typename P, typename F>
+void JsonEncoder<P, F>::encodeBytes(const uint8_t *bytes, size_t len)
 {
     parser_.advance(Symbol::sBytes);
     out_.encodeBinary(bytes, len);
 }
 
-template<typename P>
-void JsonEncoder<P>::encodeFixed(const uint8_t *bytes, size_t len)
+template<typename P, typename F>
+void JsonEncoder<P, F>::encodeFixed(const uint8_t *bytes, size_t len)
 {
     parser_.advance(Symbol::sFixed);
     parser_.assertSize(len);
     out_.encodeBinary(bytes, len);
 }
 
-template<typename P>
-void JsonEncoder<P>::encodeEnum(size_t e)
+template<typename P, typename F>
+void JsonEncoder<P, F>::encodeEnum(size_t e)
 {
     parser_.advance(Symbol::sEnum);
     const string& s = parser_.nameForIndex(e);
     out_.encodeString(s);
 }
 
-template<typename P>
-void JsonEncoder<P>::arrayStart()
+template<typename P, typename F>
+void JsonEncoder<P, F>::arrayStart()
 {
     parser_.advance(Symbol::sArrayStart);
+    parser_.pushRepeatCount(0);
     out_.arrayStart();
 }
 
-template<typename P>
-void JsonEncoder<P>::arrayEnd()
+template<typename P, typename F>
+void JsonEncoder<P, F>::arrayEnd()
 {
     parser_.popRepeater();
     parser_.advance(Symbol::sArrayEnd);
     out_.arrayEnd();
 }
 
-template<typename P>
-void JsonEncoder<P>::mapStart()
+template<typename P, typename F>
+void JsonEncoder<P, F>::mapStart()
 {
     parser_.advance(Symbol::sMapStart);
+    parser_.pushRepeatCount(0);
     out_.objectStart();
 }
 
-template<typename P>
-void JsonEncoder<P>::mapEnd()
+template<typename P, typename F>
+void JsonEncoder<P, F>::mapEnd()
 {
     parser_.popRepeater();
     parser_.advance(Symbol::sMapEnd);
     out_.objectEnd();
 }
 
-template<typename P>
-void JsonEncoder<P>::setItemCount(size_t count)
+template<typename P, typename F>
+void JsonEncoder<P, F>::setItemCount(size_t count)
 {
-    parser_.setRepeatCount(count);
+    parser_.nextRepeatCount(count);
 }
 
-template<typename P>
-void JsonEncoder<P>::startItem()
+template<typename P, typename F>
+void JsonEncoder<P, F>::startItem()
 {
     parser_.processImplicitActions();
     if (parser_.top() != Symbol::sRepeater) {
@@ -664,8 +669,8 @@ void JsonEncoder<P>::startItem()
     }
 }
 
-template<typename P>
-void JsonEncoder<P>::encodeUnionIndex(size_t e)
+template<typename P, typename F>
+void JsonEncoder<P, F>::encodeUnionIndex(size_t e)
 {
     parser_.advance(Symbol::sUnion);
 
@@ -689,7 +694,13 @@ DecoderPtr jsonDecoder(const ValidSchema& s)
 EncoderPtr jsonEncoder(const ValidSchema& schema)
 {
     return boost::make_shared<parsing::JsonEncoder<
-        parsing::SimpleParser<parsing::JsonHandler> > >(schema);
+        parsing::SimpleParser<parsing::JsonHandler<avro::json::JsonNullFormatter> >, avro::json::JsonNullFormatter> >(schema);
+}
+
+EncoderPtr jsonPrettyEncoder(const ValidSchema& schema)
+{
+    return boost::make_shared<parsing::JsonEncoder<
+        parsing::SimpleParser<parsing::JsonHandler<avro::json::JsonPrettyFormatter> >, avro::json::JsonPrettyFormatter> >(schema);
 }
 
 }   // namespace avro

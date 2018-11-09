@@ -152,15 +152,29 @@ protocol MyProtocol {
     <section id="format_enums">
       <title>Defining an Enumeration</title>
       <p>
-        Enums are defined in Avro IDL using a syntax similar to C or Java:
+        Enums are defined in Avro IDL using a syntax similar to C or Java. An Avro Enum supports optional default values.
+        In the case that a reader schema is unable to recognize a symbol written by the writer, the reader will fall back to using the defined default value.
+        This default is only used when an incompatible symbol is read. It is not used if the enum field is missing.
+      </p>
+      <p>
+        Example Writer Enum Definition
       </p>
       <source>
-enum Suit {
-  SPADES, DIAMONDS, CLUBS, HEARTS
+enum Shapes {
+  SQUARE, TRIANGLE, CIRCLE, OVAL
 }
       </source>
       <p>
-        Note that, unlike the JSON format, anonymous enums cannot be defined.
+        Example Reader Enum Definition
+      </p>
+      <source>
+enum Shapes {
+  SQUARE, TRIANGLE, CIRCLE
+} = CIRCLE;
+      </source>
+      <p>
+        In the above example, the reader will use the default value of CIRCLE whenever reading data written with the OVAL symbol of the writer.
+        Also note that, unlike the JSON format, anonymous enums cannot be defined.
       </p>
     </section>
     <section id="format_fixed">
@@ -206,6 +220,7 @@ error Kaboom {
       <p>A type reference in Avro IDL must be one of:</p>
       <ul>
         <li>A primitive type</li>
+        <li>A logical type</li>
         <li>A named schema defined prior to this usage in the same Protocol</li>
         <li>A complex type (array, map, or union)</li>
       </ul>
@@ -216,6 +231,29 @@ error Kaboom {
         This list includes <code>int</code>, <code>long</code>, <code>string</code>, <code>boolean</code>,
         <code>float</code>, <code>double</code>, <code>null</code>, and <code>bytes</code>.
         </p>
+      </section>
+
+      <section id="logical_types">
+        <title>Logical Types</title>
+        <p>Some of the logical types supported by Avro's JSON format are also supported by Avro IDL.
+        The currently supported types are:
+        </p>
+        <ul>
+          <li><code>decimal</code> (logical type <a href="spec.html#Decimal"><code>decimal</code></a>)</li>
+          <li><code>date</code> (logical type <a href="spec.html#Date"><code>date</code></a>)</li>
+          <li><code>time_ms</code> (logical type <a href="spec.html#Time+%28millisecond+precision%29"><code>time-millis</code></a>)</li>
+          <li><code>timestamp_ms</code> (logical type <a href="spec.html#Timestamp+%28millisecond+precision%29"><code>timestamp-millis</code></a>)</li>
+        </ul>
+        <p>For example:</p>
+        <source>
+record Job {
+  string jobid;
+  date submitDate;
+  time_ms submitTime;
+  timestamp_ms finishTime;
+  decimal(9,2) finishRatio;
+}
+        </source>
       </section>
 
       <section id="schema_references">

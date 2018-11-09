@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 
+import org.apache.avro.InvalidNumberEncodingException;
 import org.apache.avro.util.ByteBufferInputStream;
 
 
@@ -54,11 +55,11 @@ class DirectBinaryDecoder extends BinaryDecoder {
 
   private class ReuseByteReader extends ByteReader {
     private final ByteBufferInputStream bbi;
-    
+
     public ReuseByteReader(ByteBufferInputStream bbi) {
       this.bbi = bbi;
     }
-    
+
     @Override
     public ByteBuffer read(ByteBuffer old, int length) throws IOException {
       if (old != null) {
@@ -67,7 +68,7 @@ class DirectBinaryDecoder extends BinaryDecoder {
         return bbi.readBuffer(length);
       }
     }
-    
+
   }
 
   private ByteReader byteReader;
@@ -110,8 +111,8 @@ class DirectBinaryDecoder extends BinaryDecoder {
       }
       shift += 7;
     } while (shift < 32);
-    throw new IOException("Invalid int encoding");
-    
+    throw new InvalidNumberEncodingException("Invalid int encoding");
+
   }
 
   @Override
@@ -119,7 +120,7 @@ class DirectBinaryDecoder extends BinaryDecoder {
     long n = 0;
     int b;
     int shift = 0;
-    do { 
+    do {
       b = in.read();
       if (b >= 0) {
          n |= (b & 0x7FL) << shift;
@@ -131,7 +132,7 @@ class DirectBinaryDecoder extends BinaryDecoder {
       }
       shift += 7;
     } while (shift < 64);
-    throw new IOException("Invalid long encoding");
+    throw new InvalidNumberEncodingException("Invalid long encoding");
   }
 
   private final byte[] buf = new byte[8];

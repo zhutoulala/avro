@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,8 +22,11 @@ import java.io.ObjectOutput;
 import java.io.ObjectInput;
 import java.io.IOException;
 
+import org.apache.avro.Conversion;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.io.ResolvingDecoder;
+import org.apache.avro.io.Encoder;
 
 /** Base class for generated record classes. */
 public abstract class SpecificRecordBase
@@ -33,6 +36,11 @@ public abstract class SpecificRecordBase
   public abstract Schema getSchema();
   public abstract Object get(int field);
   public abstract void put(int field, Object value);
+
+  public Conversion<?> getConversion(int field) {
+    // for backward-compatibility. no older specific classes have conversions.
+    return null;
+  }
 
   @Override
   public void put(String fieldName, Object value) {
@@ -44,6 +52,10 @@ public abstract class SpecificRecordBase
     return get(getSchema().getField(fieldName).pos());
   }
 
+  public Conversion<?> getConversion(String fieldName) {
+    return getConversion(getSchema().getField(fieldName).pos());
+  }
+
   @Override
   public boolean equals(Object that) {
     if (that == this) return true;                        // identical object
@@ -51,7 +63,7 @@ public abstract class SpecificRecordBase
     if (this.getClass() != that.getClass()) return false; // not same schema
     return SpecificData.get().compare(this, that, this.getSchema(), true) == 0;
   }
-    
+
   @Override
   public int hashCode() {
     return SpecificData.get().hashCode(this, this.getSchema());
@@ -79,5 +91,20 @@ public abstract class SpecificRecordBase
     throws IOException {
     new SpecificDatumReader(getSchema())
       .read(this, SpecificData.getDecoder(in));
+  }
+
+  /** Returns true iff an instance supports the {@link #encode} and
+    * {@link #decode} operations.  Should only be used by
+    * <code>SpecificDatumReader/Writer</code> to selectively use
+    * {@link #customEncode} and {@link #customDecode} to optimize the (de)serialization of
+    * values. */
+  protected boolean hasCustomCoders() { return false; }
+
+  protected void customEncode(Encoder out) throws IOException {
+    throw new UnsupportedOperationException();
+  }
+
+  protected void customDecode(ResolvingDecoder in) throws IOException {
+    throw new UnsupportedOperationException();
   }
 }

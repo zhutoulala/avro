@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,14 +20,15 @@ package org.apache.avro.mojo;
 import java.io.File;
 import java.util.Arrays;
 import java.util.List;
+
 import org.apache.maven.plugin.testing.AbstractMojoTestCase;
 
 /**
- * Base class for all Arvo mojo test classes.
+ * Base class for all Avro mojo test classes.
  *
  * @author saden
  */
-public class AbstractAvroMojoTest extends AbstractMojoTestCase {
+public abstract class AbstractAvroMojoTest extends AbstractMojoTestCase {
 
   @Override
   protected void setUp() throws Exception {
@@ -41,7 +42,7 @@ public class AbstractAvroMojoTest extends AbstractMojoTestCase {
 
   /**
    * Assert the existence files in the given given directory.
-   * 
+   *
    * @param directory the directory being checked
    * @param files the files whose existence is being checked.
    */

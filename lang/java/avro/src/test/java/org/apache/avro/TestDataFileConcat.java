@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,7 +17,7 @@
  */
 package org.apache.avro;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
 
 import java.io.File;
 import java.io.IOException;
@@ -29,7 +29,9 @@ import org.apache.avro.file.DataFileReader;
 import org.apache.avro.file.DataFileWriter;
 import org.apache.avro.generic.GenericDatumReader;
 import org.apache.avro.generic.GenericDatumWriter;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
@@ -41,20 +43,23 @@ public class TestDataFileConcat {
   private static final Logger LOG =
     LoggerFactory.getLogger(TestDataFileConcat.class);
 
-  CodecFactory codec = null;
-  CodecFactory codec2 = null;
+  @Rule
+  public TemporaryFolder DIR = new TemporaryFolder();
+
+  CodecFactory codec;
+  CodecFactory codec2;
   boolean recompress;
   public TestDataFileConcat(CodecFactory codec, CodecFactory codec2, Boolean recompress) {
     this.codec = codec;
     this.codec2 = codec2;
     this.recompress = recompress;
-    LOG.info("Testing concatenating files, " + codec2 + " into " + codec + 
+    LOG.info("Testing concatenating files, " + codec2 + " into " + codec +
         " with recompress=" + recompress);
   }
 
   @Parameters
   public static List<Object[]> codecs() {
-    List<Object[]> r = new ArrayList<Object[]>();
+    List<Object[]> r = new ArrayList<>();
     r.add(new Object[] { null , null, false});
     r.add(new Object[] { null , null, true});
     r.add(new Object[]
@@ -80,8 +85,7 @@ public class TestDataFileConcat {
     Integer.parseInt(System.getProperty("test.count", "200"));
   private static final boolean VALIDATE =
     !"false".equals(System.getProperty("test.validate", "true"));
-  private static final File DIR
-    = new File(System.getProperty("test.dir", "/tmp"));
+
   private static final long SEED = System.currentTimeMillis();
 
   private static final String SCHEMA_JSON =
@@ -93,7 +97,7 @@ public class TestDataFileConcat {
   private static final Schema SCHEMA = new Schema.Parser().parse(SCHEMA_JSON);
 
   private File makeFile(String name) {
-    return new File(DIR, "test-" + name + ".avro");
+    return new File(DIR.getRoot().getPath(), "test-" + name + ".avro");
   }
 
   @Test
@@ -107,7 +111,7 @@ public class TestDataFileConcat {
       File file1 = makeFile((codec == null ? "null" : codec.toString()) + "-A");
       File file2 = makeFile((codec2 == null ? "null" : codec2.toString()) + "-B");
       DataFileWriter<Object> writer =
-        new DataFileWriter<Object>(new GenericDatumWriter<Object>())
+        new DataFileWriter<>(new GenericDatumWriter<>())
         .setSyncInterval(syncInterval);
       if (codec != null) {
         writer.setCodec(codec);
@@ -121,7 +125,7 @@ public class TestDataFileConcat {
         writer.close();
       }
       DataFileWriter<Object> writer2 =
-        new DataFileWriter<Object>(new GenericDatumWriter<Object>())
+        new DataFileWriter<>(new GenericDatumWriter<>())
         .setSyncInterval(syncInterval);
       if (codec2 != null) {
         writer2.setCodec(codec2);
@@ -134,21 +138,21 @@ public class TestDataFileConcat {
       } finally {
         writer2.close();
       }
-      DataFileWriter<Object> concatinto = 
-        new DataFileWriter<Object>(new GenericDatumWriter<Object>())
+      DataFileWriter<Object> concatinto =
+        new DataFileWriter<>(new GenericDatumWriter<>())
         .setSyncInterval(syncInterval);
       concatinto.appendTo(file1);
       DataFileReader<Object> concatfrom =
-        new DataFileReader<Object>(file2, new GenericDatumReader<Object>());
+        new DataFileReader<>(file2, new GenericDatumReader<>());
       concatinto.appendAllFrom(concatfrom, recompress);
       concatinto.close();
       concatfrom.close();
 
-      concatfrom = new DataFileReader<Object>(file2, new GenericDatumReader<Object>());
+      concatfrom = new DataFileReader<>(file2, new GenericDatumReader<>());
 
 
       DataFileReader<Object> concat =
-        new DataFileReader<Object>(file1, new GenericDatumReader<Object>());
+        new DataFileReader<>(file1, new GenericDatumReader<>());
       int count = 0;
       try {
         Object datum = null;
@@ -180,5 +184,5 @@ public class TestDataFileConcat {
 
     }
   }
-  
+
 }

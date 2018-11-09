@@ -202,7 +202,7 @@
     </dependency>
 
     <!--For testing TetherTool we need the mapred test jar
-	because that contains the word count example.-->
+        because that contains the word count example.-->
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>avro-mapred</artifactId>
@@ -221,11 +221,6 @@
       <version>${commons-logging.version}</version>
     </dependency>
     <dependency>
-      <groupId>commons-httpclient</groupId>
-      <artifactId>commons-httpclient</artifactId>
-      <version>${commons-httpclient.version}</version>
-    </dependency>
-    <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>trevni-core</artifactId>
       <version>${project.version}</version>
@@ -248,9 +243,8 @@
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>org.codehaus.jackson</groupId>
-      <artifactId>jackson-core-asl</artifactId>
-      <version>${jackson.version}</version>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
     </dependency>
     <dependency>
       <groupId>org.apache.hadoop</groupId>

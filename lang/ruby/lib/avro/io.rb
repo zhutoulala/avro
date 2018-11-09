@@ -221,46 +221,7 @@ module Avro
 
     class DatumReader
       def self.match_schemas(writers_schema, readers_schema)
-        w_type = writers_schema.type_sym
-        r_type = readers_schema.type_sym
-
-        # This conditional is begging for some OO love.
-        if w_type == :union || r_type == :union
-          return true
-        end
-
-        if w_type == r_type
-          return true if Schema::PRIMITIVE_TYPES_SYM.include?(r_type)
-
-          case r_type
-          when :record
-            return writers_schema.fullname == readers_schema.fullname
-          when :error
-            return writers_schema.fullname == readers_schema.fullname
-          when :request
-            return true
-          when :fixed
-            return writers_schema.fullname == readers_schema.fullname &&
-                   writers_schema.size == readers_schema.size
-          when :enum
-            return writers_schema.fullname == readers_schema.fullname
-          when :map
-            return writers_schema.values.type == readers_schema.values.type
-          when :array
-            return writers_schema.items.type == readers_schema.items.type
-          end
-        end
-
-        # Handle schema promotion
-        if w_type == :int && [:long, :float, :double].include?(r_type)
-          return true
-        elsif w_type == :long && [:float, :double].include?(r_type)
-          return true
-        elsif w_type == :float && r_type == :double
-          return true
-        end
-
-        return false
+        Avro::SchemaCompatibility.match_schemas(writers_schema, readers_schema)
       end
 
       attr_accessor :writers_schema, :readers_schema
@@ -293,7 +254,7 @@ module Avro
 
         # function dispatch for reading data based on type of writer's
         # schema
-        case writers_schema.type_sym
+        datum = case writers_schema.type_sym
         when :null;    decoder.read_null
         when :boolean; decoder.read_boolean
         when :string;  decoder.read_string
@@ -311,6 +272,8 @@ module Avro
         else
           raise AvroError, "Cannot read unknown schema type: #{writers_schema.type}"
         end
+
+        readers_schema.type_adapter.decode(datum)
       end
 
       def read_fixed(writers_schema, readers_schema, decoder)
@@ -393,11 +356,11 @@ module Avro
           writers_fields_hash = writers_schema.fields_hash
           readers_fields_hash.each do |field_name, field|
             unless writers_fields_hash.has_key? field_name
-              if !field.default.nil?
+              if field.default?
                 field_val = read_default_value(field.type, field.default)
                 read_record[field.name] = field_val
               else
-                # FIXME(jmhodges) another 'unset' here
+                raise AvroError, "Missing data for #{field.type} with no default"
               end
             end
           end
@@ -538,8 +501,10 @@ module Avro
         write_data(writers_schema, datum, encoder)
       end
 
-      def write_data(writers_schema, datum, encoder)
-        unless Schema.validate(writers_schema, datum)
+      def write_data(writers_schema, logical_datum, encoder)
+        datum = writers_schema.type_adapter.encode(logical_datum)
+
+        unless Schema.validate(writers_schema, datum, encoded = true)
           raise AvroTypeError.new(writers_schema, datum)
         end
 

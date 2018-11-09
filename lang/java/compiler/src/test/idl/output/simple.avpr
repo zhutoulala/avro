@@ -10,6 +10,11 @@
     "symbols" : [ "FOO", "BAR", "BAZ" ],
     "aliases" : [ "org.foo.KindOf" ]
   }, {
+   "type" : "enum",
+   "name" : "Status",
+   "symbols" : [ "A", "B", "C" ],
+   "default" : "C"
+  }, {
     "type" : "fixed",
     "name" : "MD5",
     "doc" : "An MD5 hash.",
@@ -30,6 +35,11 @@
       "doc" : "The kind of record.",
       "order" : "descending"
     }, {
+      "name" : "status",
+      "type" : "Status",
+      "doc" : "The status of the record.",
+      "default" : "A"
+    }, {
       "name" : "hash",
       "type" : "MD5",
       "default" : "0000000000000000"
@@ -46,7 +56,23 @@
       "name" : "average",
       "type" : "float",
       "default" : "-Infinity"
-    } ],
+    }, {
+      "name": "d",
+      "type": {"type": "int", "logicalType": "date"},
+      "default": 0
+    }, {
+      "name": "t",
+      "type": {"type": "int", "logicalType": "time-millis"},
+      "default": 0
+    } , {
+      "name": "l",
+      "type": {"type": "long", "foo.bar": "bar.foo"},
+      "default": 0
+    } , {
+      "name": "prop",
+      "type": [ "null" , {"type":"string", "foo.foo.bar": 42, "foo.foo.foo": "3foo"} ],
+      "default": null
+    }],
     "my-property" : {
       "key" : 3
     }

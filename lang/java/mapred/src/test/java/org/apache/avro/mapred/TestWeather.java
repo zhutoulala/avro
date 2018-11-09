@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -36,7 +36,6 @@ import org.apache.avro.specific.SpecificDatumReader;
 import org.apache.avro.file.DataFileReader;
 import static org.apache.avro.file.DataFileConstants.SNAPPY_CODEC;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
 
 import org.junit.After;
 import org.junit.Test;
@@ -67,29 +66,29 @@ public class TestWeather {
     JobConf job = new JobConf();
     String inDir = System.getProperty("share.dir","../../../share")+"/test/data";
     Path input = new Path(inDir+"/weather.avro");
-    Path output = new Path(System.getProperty("test.dir","target/test")+"/weather-ident");
-    
+    Path output = new Path("target/test/weather-ident");
+
     output.getFileSystem(job).delete(output);
-    
+
     job.setJobName("identity map weather");
-    
+
     AvroJob.setInputSchema(job, Weather.SCHEMA$);
     AvroJob.setOutputSchema(job, Weather.SCHEMA$);
 
     FileInputFormat.setInputPaths(job, input);
     FileOutputFormat.setOutputPath(job, output);
     FileOutputFormat.setCompressOutput(job, true);
-    
+
     job.setNumReduceTasks(0);                     // map-only
 
     JobClient.runJob(job);
 
     // check output is correct
-    DatumReader<Weather> reader = new SpecificDatumReader<Weather>();
-    DataFileReader<Weather> check = new DataFileReader<Weather>
-      (new File(inDir+"/weather.avro"), reader);
-    DataFileReader<Weather> sorted = new DataFileReader<Weather>
-      (new File(output.toString()+"/part-00000.avro"), reader);
+    DatumReader<Weather> reader = new SpecificDatumReader<>();
+    DataFileReader<Weather> check = new DataFileReader<>
+      (new File(inDir + "/weather.avro"), reader);
+    DataFileReader<Weather> sorted = new DataFileReader<>
+      (new File(output.toString() + "/part-00000.avro"), reader);
 
     for (Weather w : sorted)
       assertEquals(check.next(), w);
@@ -103,7 +102,7 @@ public class TestWeather {
     @Override
     public void map(Weather w, AvroCollector<Pair<Weather,Void>> collector,
                       Reporter reporter) throws IOException {
-      collector.collect(new Pair<Weather,Void>(w, (Void)null));
+      collector.collect(new Pair<>(w, (Void) null));
     }
 
     @Override
@@ -142,35 +141,35 @@ public class TestWeather {
   @SuppressWarnings("deprecation")
   public void testSort() throws Exception {
     JobConf job = new JobConf();
-    String inDir = System.getProperty("share.dir","../../../share")+"/test/data";
+    String inDir = "../../../share/test/data";
     Path input = new Path(inDir+"/weather.avro");
-    Path output = new Path(System.getProperty("test.dir","target/test")+"/weather-sort");
-    
+    Path output = new Path("target/test/weather-sort");
+
     output.getFileSystem(job).delete(output);
-    
+
     job.setJobName("sort weather");
-    
+
     AvroJob.setInputSchema(job, Weather.SCHEMA$);
     AvroJob.setMapOutputSchema
       (job, Pair.getPairSchema(Weather.SCHEMA$, Schema.create(Type.NULL)));
     AvroJob.setOutputSchema(job, Weather.SCHEMA$);
-    
-    AvroJob.setMapperClass(job, SortMapper.class);        
+
+    AvroJob.setMapperClass(job, SortMapper.class);
     AvroJob.setReducerClass(job, SortReducer.class);
 
     FileInputFormat.setInputPaths(job, input);
     FileOutputFormat.setOutputPath(job, output);
     FileOutputFormat.setCompressOutput(job, true);
     AvroJob.setOutputCodec(job, SNAPPY_CODEC);
-    
+
     JobClient.runJob(job);
 
     // check output is correct
-    DatumReader<Weather> reader = new SpecificDatumReader<Weather>();
-    DataFileReader<Weather> check = new DataFileReader<Weather>
-      (new File(inDir+"/weather-sorted.avro"), reader);
-    DataFileReader<Weather> sorted = new DataFileReader<Weather>
-      (new File(output.toString()+"/part-00000.avro"), reader);
+    DatumReader<Weather> reader = new SpecificDatumReader<>();
+    DataFileReader<Weather> check = new DataFileReader<>
+      (new File(inDir + "/weather-sorted.avro"), reader);
+    DataFileReader<Weather> sorted = new DataFileReader<>
+      (new File(output.toString() + "/part-00000.avro"), reader);
 
     for (Weather w : sorted)
       assertEquals(check.next(), w);

@@ -31,7 +31,7 @@ using boost::format;
 
 namespace avro {
 namespace json {
-static const char* typeToString(EntityType t)
+const char* typeToString(EntityType t)
 {
     switch (t) {
     case etNull: return "null";
@@ -50,31 +50,33 @@ Entity readEntity(JsonParser& p)
     switch (p.peek()) {
     case JsonParser::tkNull:
         p.advance();
-        return Entity();
+        return Entity(p.line());
     case JsonParser::tkBool:
         p.advance();
-        return Entity(p.boolValue());
+        return Entity(p.boolValue(), p.line());
     case JsonParser::tkLong:
         p.advance();
-        return Entity(p.longValue());
+        return Entity(p.longValue(), p.line());
     case JsonParser::tkDouble:
         p.advance();
-        return Entity(p.doubleValue());
+        return Entity(p.doubleValue(), p.line());
     case JsonParser::tkString:
         p.advance();
-        return Entity(boost::make_shared<String>(p.stringValue()));
+        return Entity(boost::make_shared<String>(p.stringValue()), p.line());
     case JsonParser::tkArrayStart:
         {
+            size_t l = p.line();
             p.advance();
             boost::shared_ptr<Array> v = boost::make_shared<Array>();
             while (p.peek() != JsonParser::tkArrayEnd) {
                 v->push_back(readEntity(p));
             }
             p.advance();
-            return Entity(v);
+            return Entity(v, l);
         }
     case JsonParser::tkObjectStart:
         {
+            size_t l = p.line();
             p.advance();
             boost::shared_ptr<Object> v = boost::make_shared<Object>();
             while (p.peek() != JsonParser::tkObjectEnd) {
@@ -84,7 +86,7 @@ Entity readEntity(JsonParser& p)
                 v->insert(std::make_pair(k, n));
             }
             p.advance();
-            return Entity(v);
+            return Entity(v, l);
         }
     default:
         throw std::domain_error(JsonParser::toString(p.peek()));
@@ -110,7 +112,7 @@ Entity loadEntity(const uint8_t* text, size_t len)
     return loadEntity(*in);
 }
 
-void writeEntity(JsonGenerator& g, const Entity& n)
+void writeEntity(JsonGenerator<JsonNullFormatter>& g, const Entity& n)
 {
     switch (n.type()) {
     case etNull:
@@ -166,7 +168,7 @@ void Entity::ensureType(EntityType type) const
 std::string Entity::toString() const
 {
     std::auto_ptr<OutputStream> out = memoryOutputStream();
-    JsonGenerator g;
+    JsonGenerator<JsonNullFormatter> g;
     g.init(*out);
     writeEntity(g, *this);
     g.flush();

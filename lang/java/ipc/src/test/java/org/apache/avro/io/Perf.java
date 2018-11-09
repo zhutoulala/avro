@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,6 +19,8 @@ package org.apache.avro.io;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.FileOutputStream;
+import java.io.PrintStream;
 import java.lang.reflect.Array;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -50,9 +52,11 @@ import org.apache.avro.util.Utf8;
  * Avro encoding and decoding.
  */
 public class Perf {
-  private static final int COUNT = 250000; // needs to be a multiple of 4
-  private static final int CYCLES = 800;
-  
+  private static final int COUNT // needs to be a multiple of 4
+    = Integer.parseInt(System.getProperty("org.apache.avro.io.perf.count","250000"));
+  private static final int CYCLES
+    = Integer.parseInt(System.getProperty("org.apache.avro.io.perf.cycles","800"));
+
   /**
    * Use a fixed value seed for random number generation
    * to allow for better cross-run comparisons.
@@ -62,7 +66,7 @@ public class Perf {
   protected static Random newRandom() {
     return new Random(SEED);
   }
-  
+
   private static class TestDescriptor {
     Class<? extends Test> test;
     String param;
@@ -75,18 +79,18 @@ public class Perf {
       typeList.add(this);
     }
   }
-  
-  private static final List<TestDescriptor> BASIC = new ArrayList<TestDescriptor>();
-  private static final List<TestDescriptor> RECORD = new ArrayList<TestDescriptor>();
-  private static final List<TestDescriptor> GENERIC = new ArrayList<TestDescriptor>();
-  private static final List<TestDescriptor> GENERIC_ONETIME = new ArrayList<TestDescriptor>();
-  private static final List<TestDescriptor> SPECIFIC = new ArrayList<TestDescriptor>();
-  private static final List<TestDescriptor> REFLECT = new ArrayList<TestDescriptor>();
+
+  private static final List<TestDescriptor> BASIC = new ArrayList<>();
+  private static final List<TestDescriptor> RECORD = new ArrayList<>();
+  private static final List<TestDescriptor> GENERIC = new ArrayList<>();
+  private static final List<TestDescriptor> GENERIC_ONETIME = new ArrayList<>();
+  private static final List<TestDescriptor> SPECIFIC = new ArrayList<>();
+  private static final List<TestDescriptor> REFLECT = new ArrayList<>();
   private static final LinkedHashMap<String, TestDescriptor> ALL_TESTS;
   private static final LinkedHashMap<String, List<TestDescriptor>> BATCHES;
   static {
-    ALL_TESTS = new LinkedHashMap<String, TestDescriptor>();
-    BATCHES = new LinkedHashMap<String, List<TestDescriptor>>();
+    ALL_TESTS = new LinkedHashMap<>();
+    BATCHES = new LinkedHashMap<>();
     BATCHES.put("-basic", BASIC);
     new TestDescriptor(IntTest.class, "-i").add(BASIC);
     new TestDescriptor(SmallLongTest.class, "-ls").add(BASIC);
@@ -132,10 +136,18 @@ public class Perf {
     new TestDescriptor(ReflectNestedLargeFloatArrayTest.class, "-REFnlf").add(REFLECT);
     new TestDescriptor(ReflectNestedLargeFloatArrayBlockedTest.class, "-REFnlfb").add(REFLECT);
   }
-  
+  private static final int NAME_FIELD = 0;
+  private static final int TIME_FIELD = 1;
+  private static final int BYTES_PS_FIELD = 2;
+  private static final int ENTRIES_PS_FIELD = 3;
+  private static final int BYTES_PC_FIELD = 4;
+  private static final int MAX_FIELD = 4;
+
   private static void usage() {
-    StringBuilder usage = new StringBuilder("Usage: Perf { -nowrite | -noread | ");
+    StringBuilder usage = new StringBuilder("Usage: Perf [-o <file>] [-c <spec>] { -nowrite | -noread | ");
     StringBuilder details = new StringBuilder();
+    details.append(" -o file   (send output to a file)\n");
+    details.append(" -c [n][t][e][b][c] (format as no-header CSV; include Name, Time, Entries/sec, Bytes/sec, and/or bytes/Cycle; no spec=all fields)\n");
     details.append(" -nowrite   (do not execute write tests)\n");
     details.append(" -noread   (do not execute write tests)\n");
     for (Map.Entry<String, List<TestDescriptor>> entry : BATCHES.entrySet()) {
@@ -154,12 +166,22 @@ public class Perf {
     System.out.println(usage.toString());
     System.out.print(details.toString());
   }
-  
+
   public static void main(String[] args) throws Exception {
-    List<Test> tests = new ArrayList<Test>();
+    if (0 != (COUNT % 4)) {
+      System.out.println("Property 'org.apache.avro.io.perf.count' must be a multiple of 4.");
+      System.exit(1);
+    }
+
+    List<Test> tests = new ArrayList<>();
     boolean writeTests = true;
     boolean readTests = true;
-    for (String a : args) {
+    String outputfilename = null;
+    PrintStream out = System.out;
+    boolean[] csvFormat = null;
+
+    for (int i = 0; i < args.length; i++) {
+      String a = args[i];
       TestDescriptor t = ALL_TESTS.get(a);
       if (null != t) {
         tests.add(t.test.newInstance());
@@ -169,6 +191,30 @@ public class Perf {
       if (null != lt) {
         for (TestDescriptor td : lt) {
           tests.add(td.test.newInstance());
+        }
+        continue;
+      }
+      if (i < args.length-1 && "-o".equals(a)) {
+        outputfilename = args[++i];
+        out = new PrintStream(new FileOutputStream(outputfilename));
+        continue;
+      }
+      if ("-c".equals(a)) {
+        if (i == args.length-1 || args[i+1].startsWith("-"))
+          csvFormat = new boolean[] { true, true, true, true, true };
+        else {
+          csvFormat = new boolean[5];
+          for (char c : args[++i].toCharArray())
+            switch (c) {
+            case 'n': csvFormat[NAME_FIELD] = true; break;
+            case 't': csvFormat[TIME_FIELD] = true; break;
+            case 'e': csvFormat[BYTES_PS_FIELD] = true; break;
+            case 'b': csvFormat[ENTRIES_PS_FIELD] = true; break;
+            case 'c': csvFormat[BYTES_PC_FIELD] = true; break;
+            default:
+              usage();
+              System.exit(1);
+            }
         }
         continue;
       }
@@ -192,7 +238,9 @@ public class Perf {
     }
     System.out.println("Executing tests: \n" + tests +  "\n readTests:" +
         readTests + "\n writeTests:" + writeTests + "\n cycles=" + CYCLES);
-    
+    if (out != System.out) System.out.println(" Writing to: " + outputfilename);
+    if (csvFormat != null) System.out.println(" in CSV format.");
+
     for (int k = 0; k < tests.size(); k++) {
       Test t = tests.get(k);
       try {
@@ -210,8 +258,8 @@ public class Perf {
         throw e;
       }
     }
-    
-    printHeader();
+
+    if (csvFormat == null) printHeader();
 
     for (int k = 0; k < tests.size(); k++) {
       Test t = tests.get(k);
@@ -236,37 +284,54 @@ public class Perf {
         for (int i = 0; i < t.cycles; i++) {
           s += t.readTest();
         }
-        printResult(s, t, t.name + "Read");
+        printResult(out, csvFormat, s, t, t.name + "Read");
       }
       s = 0;
       if (t.isWriteTest() && writeTests) {
         for (int i = 0; i < t.cycles; i++) {
           s += t.writeTest();
         }
-        printResult(s, t, t.name + "Write");
+        printResult(out, csvFormat, s, t, t.name + "Write");
       }
       t.reset();
     }
   }
-  
+
   private static final void printHeader() {
     String header = String.format(
         "%60s     time    M entries/sec   M bytes/sec  bytes/cycle",
         "test name");
     System.out.println(header.toString());
   }
-  
-  private static final void printResult(long s, Test t, String name) {
+
+  private static final void printResult(PrintStream o, boolean[] csv,
+                                        long s, Test t, String name)
+  {
     s /= 1000;
     double entries = (t.cycles * (double) t.count);
     double bytes = t.cycles * (double) t.encodedSize;
     StringBuilder result = new StringBuilder();
-    result.append(String.format("%42s: %6d ms  ", name, (s/1000)));
-    result.append(String.format("%10.3f   %11.3f   %11d", 
-        (entries / s), (bytes/ s),  t.encodedSize));
-    System.out.println(result.toString());
+    if (csv != null) {
+      boolean commaneeded = false;
+      for (int i = 0; i <= MAX_FIELD; i++) {
+        if (commaneeded) result.append(",");
+        else commaneeded = true;
+        switch (i) {
+        case NAME_FIELD: result.append(name); break;
+        case TIME_FIELD: result.append(String.format("%d", (s/1000))); break;
+        case BYTES_PS_FIELD: result.append(String.format("%.3f", (entries / s))); break;
+        case ENTRIES_PS_FIELD: result.append(String.format(".3%f", (bytes / s))); break;
+        case BYTES_PC_FIELD: result.append(String.format("%d", t.encodedSize)); break;
+        }
+      }
+    } else {
+      result.append(String.format("%42s: %6d ms  ", name, (s/1000)));
+      result.append(String.format("%10.3f   %11.3f   %11d",
+                                  (entries / s), (bytes/ s),  t.encodedSize));
+    }
+    o.println(result.toString());
   }
-  
+
   private abstract static class Test {
 
     /**
@@ -280,7 +345,7 @@ public class Perf {
     protected boolean isWriteTest = true;
     static DecoderFactory decoder_factory = new DecoderFactory();
     static EncoderFactory encoder_factory = new EncoderFactory();
-    
+
     public Test(String name, int cycles, int count) {
       this.name = name;
       this.cycles = cycles;
@@ -291,33 +356,33 @@ public class Perf {
      * Reads data from a Decoder and returns the time taken in nanoseconds.
      */
     abstract long readTest() throws IOException;
-    
+
     /**
      * Writes data to an Encoder and returns the time taken in nanoseconds.
      */
     abstract long writeTest() throws IOException;
-    
+
     final boolean isWriteTest() {
       return isWriteTest;
     }
-    
+
     final boolean isReadTest() {
       return isReadTest;
     }
- 
+
     /** initializes data for read and write tests **/
     abstract void init() throws IOException;
 
     /** clears generated data arrays and other large objects created during initialization **/
     abstract void reset();
-    
+
     @Override
     public String toString() {
       return this.getClass().getSimpleName();
     }
-       
+
   }
-  
+
   /** the basic test writes a simple schema directly to an encoder or
    * reads from an array.  It does not use GenericDatumReader or any
    * higher level constructs, just manual serialization.
@@ -340,7 +405,7 @@ public class Perf {
       readInternal(d);
       return (System.nanoTime() - t);
     }
-    
+
     @Override
     public final long writeTest() throws IOException {
       long t = System.nanoTime();
@@ -349,11 +414,11 @@ public class Perf {
       e.flush();
       return (System.nanoTime() - t);
     }
-    
+
     protected Decoder getDecoder() throws IOException {
       return newDecoder();
     }
-    
+
     private Encoder getEncoder() throws IOException {
       return newEncoder(getOutputStream());
     }
@@ -361,7 +426,7 @@ public class Perf {
     protected Decoder newDecoder() {
       return decoder_factory.binaryDecoder(data, null);
     }
-    
+
     protected Encoder newEncoder(ByteArrayOutputStream out) throws IOException {
       Encoder e = encoder_factory.binaryEncoder(out, null);
 //    Encoder e = encoder_factory.directBinaryEncoder(out, null);
@@ -373,7 +438,7 @@ public class Perf {
     private ByteArrayOutputStream getOutputStream() {
       return new ByteArrayOutputStream((int)(encodedSize > 0 ? encodedSize : count));
     }
-    
+
     @Override
     void init() throws IOException {
       genSourceData();
@@ -390,7 +455,7 @@ public class Perf {
     abstract void readInternal(Decoder d) throws IOException;
     abstract void writeInternal(Encoder e) throws IOException;
   }
-  
+
   static class IntTest extends BasicTest {
     protected int[] sourceData = null;
     public IntTest() throws IOException {
@@ -412,7 +477,7 @@ public class Perf {
         sourceData[i+3] = r.nextInt(150000000); // most in 4, some in 5
       }
     }
-   
+
     @Override
     void readInternal(Decoder d) throws IOException {
       for (int i = 0; i < count/4; i++) {
@@ -432,7 +497,7 @@ public class Perf {
         e.writeInt(sourceData[i+3]);
       }
     }
-  
+
     @Override
     void reset() {
       sourceData = null;
@@ -466,30 +531,30 @@ public class Perf {
       }
     }
   }
- 
+
   // this tests reading Longs that are sometimes very large
   static class LongTest extends BasicTest {
     private long[] sourceData = null;
     public LongTest() throws IOException {
       super("Long", "{ \"type\": \"long\"} ");
     }
-    
+
     @Override
     void genSourceData() {
       Random r = newRandom();
       sourceData = new long[count];
       for (int i = 0; i < sourceData.length; i+=4) {
-        sourceData[i] = r.nextLong() % 0x7FL; // half fit in 1, half in 2 
+        sourceData[i] = r.nextLong() % 0x7FL; // half fit in 1, half in 2
         sourceData[i+1] = r.nextLong() % 0x1FFFFFL; // half fit in <=3, half in 4
         sourceData[i+2] = r.nextLong() % 0x3FFFFFFFFL; // half in <=5, half in 6
-        sourceData[i+3] = r.nextLong() % 0x1FFFFFFFFFFFFL; // half in <=8, half in 9 
+        sourceData[i+3] = r.nextLong() % 0x1FFFFFFFFFFFFL; // half in <=8, half in 9
       }
       // last 16, make full size
       for (int i = sourceData.length - 16; i < sourceData.length; i ++) {
         sourceData[i] = r.nextLong();
       }
     }
-   
+
     @Override
     void readInternal(Decoder d) throws IOException {
       for (int i = 0; i < count/4; i++) {
@@ -509,14 +574,14 @@ public class Perf {
         e.writeLong(sourceData[i+3]);
       }
     }
-  
+
     @Override
     void reset() {
       sourceData = null;
       data = null;
     }
   }
-  
+
   static class FloatTest extends BasicTest {
     float[] sourceData = null;
     public FloatTest() throws IOException {
@@ -531,10 +596,10 @@ public class Perf {
       Random r = newRandom();
       sourceData = new float[count];
       for (int i = 0; i < sourceData.length;) {
-        sourceData[i++] = r.nextFloat(); 
+        sourceData[i++] = r.nextFloat();
       }
     }
-   
+
     @Override
     void readInternal(Decoder d) throws IOException {
       for (int i = 0; i < count; i+=4) {
@@ -554,7 +619,7 @@ public class Perf {
         e.writeFloat(sourceData[i+3]);
       }
     }
-  
+
     @Override
     void reset() {
       sourceData = null;
@@ -567,16 +632,16 @@ public class Perf {
     public DoubleTest() throws IOException {
       super("Double", "{ \"type\": \"double\"} ");
     }
-    
+
     @Override
     void genSourceData() {
       Random r = newRandom();
       sourceData = new double[count];
       for (int i = 0; i < sourceData.length;) {
-        sourceData[i++] = r.nextDouble(); 
+        sourceData[i++] = r.nextDouble();
       }
     }
-   
+
     @Override
     void readInternal(Decoder d) throws IOException {
       for (int i = 0; i < count; i+=4) {
@@ -596,29 +661,29 @@ public class Perf {
         e.writeDouble(sourceData[i+3]);
       }
     }
-  
+
     @Override
     void reset() {
       sourceData = null;
       data = null;
     }
   }
-  
+
   static class BoolTest extends BasicTest {
     boolean[] sourceData = null;
     public BoolTest() throws IOException {
       super("Boolean", "{ \"type\": \"boolean\"} ");
     }
-    
+
     @Override
     void genSourceData() {
       Random r = newRandom();
       sourceData = new boolean[count];
       for (int i = 0; i < sourceData.length;) {
-        sourceData[i++] = r.nextBoolean(); 
+        sourceData[i++] = r.nextBoolean();
       }
     }
-   
+
     @Override
     void readInternal(Decoder d) throws IOException {
       for (int i = 0; i < count/4; i++) {
@@ -638,20 +703,20 @@ public class Perf {
         e.writeBoolean(sourceData[i+3]);
       }
     }
-  
+
     @Override
     void reset() {
       sourceData = null;
       data = null;
     }
   }
-  
+
   static class BytesTest extends BasicTest {
     byte[][] sourceData = null;
     public BytesTest() throws IOException {
       super("Bytes", "{ \"type\": \"bytes\"} ", 5);
     }
-    
+
     @Override
     void genSourceData() {
       Random r = newRandom();
@@ -659,10 +724,10 @@ public class Perf {
       for (int i = 0; i < sourceData.length;) {
         byte[] data = new byte[r.nextInt(70)];
         r.nextBytes(data);
-        sourceData[i++] = data; 
+        sourceData[i++] = data;
       }
     }
-   
+
     @Override
     void readInternal(Decoder d) throws IOException {
       ByteBuffer bb = ByteBuffer.allocate(70);
@@ -683,14 +748,14 @@ public class Perf {
         e.writeBytes(sourceData[i+3]);
       }
     }
-  
+
     @Override
     void reset() {
       sourceData = null;
       data = null;
     }
   }
-  
+
   private static String randomString(Random r) {
     char[] data = new char[r.nextInt(70)];
     for (int j = 0; j < data.length; j++) {
@@ -704,7 +769,7 @@ public class Perf {
     public StringTest() throws IOException {
       super("String", "{ \"type\": \"string\"} ", 5);
     }
-    
+
     @Override
     void genSourceData() {
       Random r = newRandom();
@@ -712,7 +777,7 @@ public class Perf {
       for (int i = 0; i < sourceData.length;)
         sourceData[i++] = randomString(r);
     }
-   
+
     @Override
     void readInternal(Decoder d) throws IOException {
       Utf8 utf = new Utf8();
@@ -733,14 +798,14 @@ public class Perf {
         e.writeString(sourceData[i+3]);
       }
     }
-  
+
     @Override
     void reset() {
       sourceData = null;
       data = null;
     }
   }
-  
+
   static class ArrayTest extends FloatTest {
     public ArrayTest() throws IOException {
       super("Array",
@@ -757,7 +822,7 @@ public class Perf {
           "    }" +
           "   }]}}");
     }
-   
+
     @Override
     void readInternal(Decoder d) throws IOException {
       d.readArrayStart();
@@ -791,7 +856,7 @@ public class Perf {
       e.writeArrayEnd();
     }
   }
-  
+
   static class MapTest extends FloatTest {
     public MapTest() throws IOException {
       super("Map", "{ \"type\": \"map\", \"values\": " +
@@ -802,7 +867,7 @@ public class Perf {
           "   {\"name\":\"f4\", \"type\":\"float\"}]" +
           "  }} ");
     }
-   
+
     @Override
     void readInternal(Decoder d) throws IOException {
       Utf8 key = new Utf8();
@@ -834,8 +899,8 @@ public class Perf {
       e.writeMapEnd();
     }
   }
-  
-  private static final String RECORD_SCHEMA = 
+
+  private static final String RECORD_SCHEMA =
     "{ \"type\": \"record\", \"name\": \"R\", \"fields\": [\n"
     + "{ \"name\": \"f1\", \"type\": \"double\" },\n"
     + "{ \"name\": \"f2\", \"type\": \"double\" },\n"
@@ -844,7 +909,7 @@ public class Perf {
     + "{ \"name\": \"f5\", \"type\": \"int\" },\n"
     + "{ \"name\": \"f6\", \"type\": \"int\" }\n"
     + "] }";
-  
+
   private static final String NESTED_RECORD_SCHEMA =
     "{ \"type\": \"record\", \"name\": \"R\", \"fields\": [\n"
     + "{ \"name\": \"f1\", \"type\": \n" +
@@ -857,7 +922,7 @@ public class Perf {
     + "{ \"name\": \"f5\", \"type\": \"int\" },\n"
     + "{ \"name\": \"f6\", \"type\": \"int\" }\n"
     + "] }";
-  
+
   private static class Rec {
     double f1;
     double f2;
@@ -866,7 +931,7 @@ public class Perf {
     int f5;
     int f6;
     Rec() {
-      
+
     }
     Rec(Random r) {
       f1 = r.nextDouble();
@@ -891,7 +956,7 @@ public class Perf {
       Random r = newRandom();
       sourceData = new Rec[count];
       for (int i = 0; i < sourceData.length; i++) {
-        sourceData[i] = new Rec(r); 
+        sourceData[i] = new Rec(r);
       }
     }
     @Override
@@ -923,7 +988,7 @@ public class Perf {
       data = null;
     }
   }
-  
+
   static class ValidatingRecord extends RecordTest {
     ValidatingRecord() throws IOException {
       super("ValidatingRecord");
@@ -934,10 +999,10 @@ public class Perf {
     }
     @Override
     protected Encoder newEncoder(ByteArrayOutputStream out) throws IOException {
-      return encoder_factory.validatingEncoder(schema, super.newEncoder(out));  
+      return encoder_factory.validatingEncoder(schema, super.newEncoder(out));
     }
   }
-  
+
   static class ResolvingRecord extends RecordTest {
     public ResolvingRecord() throws IOException {
       super("ResolvingRecord");
@@ -962,7 +1027,7 @@ public class Perf {
     + "{ \"name\": \"f8\", \"type\": \"string\","
       + "\"default\": \"undefined\" }\n"
     + "] }";
-  
+
   private static final String RECORD_SCHEMA_WITH_OUT_OF_ORDER =
     "{ \"type\": \"record\", \"name\": \"R\", \"fields\": [\n"
     + "{ \"name\": \"f1\", \"type\": \"double\" },\n"
@@ -1025,7 +1090,7 @@ public class Perf {
       }
     }
   }
-  
+
   /**
    * Tests the performance of resolving a change in field order.
    */
@@ -1063,7 +1128,7 @@ public class Perf {
       }
     }
   }
-  
+
   /**
    * Tests the performance of resolving a type promotion.
    */
@@ -1101,7 +1166,7 @@ public class Perf {
       }
     }
   }
-  
+
   static class GenericTest extends BasicTest {
     GenericRecord[] sourceData = null;
     protected final GenericDatumReader<Object> reader;
@@ -1119,7 +1184,7 @@ public class Perf {
       return reader;
     }
     protected GenericDatumReader<Object> newReader() {
-      return new GenericDatumReader<Object>(schema);
+      return new GenericDatumReader<>(schema);
     }
     @Override
     void genSourceData() {
@@ -1133,7 +1198,7 @@ public class Perf {
         rec.put(3, r.nextInt());
         rec.put(4, r.nextInt());
         rec.put(5, r.nextInt());
-        sourceData[i] = rec; 
+        sourceData[i] = rec;
       }
     }
     @Override
@@ -1144,7 +1209,7 @@ public class Perf {
     }
     @Override
     void writeInternal(Encoder e) throws IOException {
-      GenericDatumWriter<Object> writer = new GenericDatumWriter<Object>(schema);
+      GenericDatumWriter<Object> writer = new GenericDatumWriter<>(schema);
       for (int i = 0; i < sourceData.length; i++) {
         GenericRecord rec = sourceData[i];
         writer.write(rec, e);
@@ -1156,14 +1221,14 @@ public class Perf {
       data = null;
     }
   }
-  
-  private static final String GENERIC_STRINGS = 
+
+  private static final String GENERIC_STRINGS =
     "{ \"type\": \"record\", \"name\": \"R\", \"fields\": [\n"
     + "{ \"name\": \"f1\", \"type\": \"string\" },\n"
     + "{ \"name\": \"f2\", \"type\": \"string\" },\n"
     + "{ \"name\": \"f3\", \"type\": \"string\" }\n"
     + "] }";
-  
+
   static class GenericStrings extends GenericTest {
     public GenericStrings() throws IOException {
       super("GenericStrings", GENERIC_STRINGS);
@@ -1177,7 +1242,7 @@ public class Perf {
         rec.put(0, randomString(r));
         rec.put(1, randomString(r));
         rec.put(2, randomString(r));
-        sourceData[i] = rec; 
+        sourceData[i] = rec;
       }
     }
   }
@@ -1210,11 +1275,11 @@ public class Perf {
       rec.put(3, r.nextInt());
       rec.put(4, r.nextInt());
       rec.put(5, r.nextInt());
-      sourceData[i] = rec; 
+      sourceData[i] = rec;
     }
     return sourceData;
   }
-  
+
   static class GenericNestedFake extends BasicTest {
     //reads and writes generic data, but not using
     //GenericDatumReader or GenericDatumWriter
@@ -1267,7 +1332,7 @@ public class Perf {
       data = null;
       sourceData = null;
     }
-    
+
   }
 
   private static abstract class GenericResolving extends GenericTest {
@@ -1278,7 +1343,7 @@ public class Perf {
     }
     @Override
     protected GenericDatumReader<Object> newReader() {
-      return new GenericDatumReader<Object>(schema, getReaderSchema());
+      return new GenericDatumReader<>(schema, getReaderSchema());
     }
     protected abstract Schema getReaderSchema();
   }
@@ -1312,7 +1377,7 @@ public class Perf {
       return new Schema.Parser().parse(RECORD_SCHEMA_WITH_PROMOTION);
     }
   }
-  
+
   static class GenericOneTimeDecoderUse extends GenericTest {
     public GenericOneTimeDecoderUse() throws IOException {
       super("GenericOneTimeDecoderUse_");
@@ -1367,10 +1432,10 @@ public class Perf {
       return writer;
     }
     protected SpecificDatumReader<T> newReader() {
-      return new SpecificDatumReader<T>(schema);
+      return new SpecificDatumReader<>(schema);
     }
     protected SpecificDatumWriter<T> newWriter() {
-      return new SpecificDatumWriter<T>(schema);
+      return new SpecificDatumWriter<>(schema);
     }
     @Override
     void genSourceData() {
@@ -1413,7 +1478,7 @@ public class Perf {
     @Override
     protected FooBarSpecificRecord genSingleRecord(Random r) {
       TypeEnum[] typeEnums = TypeEnum.values();
-      List<Integer> relatedIds = new ArrayList<Integer>(10);
+      List<Integer> relatedIds = new ArrayList<>(10);
       for (int i = 0; i < 10; i++) {
         relatedIds.add(r.nextInt());
       }
@@ -1440,8 +1505,8 @@ public class Perf {
     ReflectTest(String name, T sample, int factor) throws IOException {
       super(name, ReflectData.get().getSchema(sample.getClass()).toString(), factor);
       clazz = (Class<T>) sample.getClass();
-      reader = new ReflectDatumReader<T>(schema);
-      writer = new ReflectDatumWriter<T>(schema);
+      reader = new ReflectDatumReader<>(schema);
+      writer = new ReflectDatumWriter<>(schema);
     }
 
     @SuppressWarnings("unchecked")
@@ -1487,7 +1552,7 @@ public class Perf {
       return new Rec(r);
     }
   }
-  
+
   static class ReflectFloatTest extends ReflectTest<float[]> {
     ReflectFloatTest() throws IOException {
       super("ReflectFloat", new float[0], COUNT);
@@ -1531,7 +1596,7 @@ public class Perf {
       return populateDoubleArray(r);
     }
   }
-  
+
   static class ReflectIntArrayTest extends ReflectTest<int[]> {
     ReflectIntArrayTest() throws IOException {
       super("ReflectIntArray", new int[0], 12);
@@ -1542,7 +1607,7 @@ public class Perf {
       return populateIntArray(r);
     }
   }
-  
+
   static class ReflectLongArrayTest extends ReflectTest<long[]> {
     ReflectLongArrayTest() throws IOException {
       super("ReflectLongArray", new long[0], 24);
@@ -1571,7 +1636,7 @@ public class Perf {
 
       Foo() {
       }
-      
+
       Foo(Random r) {
         bar = new Vals[smallArraySize(r)];
         for (int i = 0; i < bar.length; i++) {
@@ -1588,7 +1653,7 @@ public class Perf {
 
       Vals(){
       }
-      
+
       Vals(Random r) {
         this.f1 = r.nextFloat();
         this.f2 = r.nextFloat();
@@ -1601,7 +1666,7 @@ public class Perf {
 
   static public class FloatFoo {
     float[] floatBar;
-    
+
     FloatFoo() {
     }
 
@@ -1624,7 +1689,7 @@ public class Perf {
     int size = large ? largeArraySize(r) : smallArraySize(r);
     return populateFloatArray(r, size);
   }
-  
+
   static float[] populateFloatArray(Random r, int size) {
     float[] result = new float[size];
     for (int i = 0; i < result.length; i++) {
@@ -1632,11 +1697,11 @@ public class Perf {
     }
     return result;
   }
-  
+
   static double[] populateDoubleArray(Random r) {
     return populateDoubleArray(r, smallArraySize(r));
   }
-  
+
   static double[] populateDoubleArray(Random r, int size) {
     double[] result = new double[size];
     for (int i = 0; i < result.length; i++) {
@@ -1653,7 +1718,7 @@ public class Perf {
     }
     return result;
   }
-  
+
   static long[] populateLongArray(Random r) {
     int size = smallArraySize(r);
     long[] result = new long[size];
@@ -1662,7 +1727,7 @@ public class Perf {
     }
     return result;
   }
-  
+
   static class ReflectNestedFloatArrayTest extends ReflectTest<FloatFoo> {
     public ReflectNestedFloatArrayTest() throws IOException {
       super("ReflectNestedFloatArray", new FloatFoo(new Random(), false), 10);
@@ -1686,7 +1751,7 @@ public class Perf {
     }
 
   }
-  
+
   static class ReflectNestedLargeFloatArrayBlockedTest extends ReflectTest<FloatFoo> {
     public ReflectNestedLargeFloatArrayBlockedTest() throws IOException {
       super("ReflectNestedLargeFloatArrayBlocked", new FloatFoo(new Random(), true),
@@ -1697,7 +1762,7 @@ public class Perf {
     protected FloatFoo createDatum(Random r) {
       return new FloatFoo(r, true);
     }
-    
+
     @Override
     protected Encoder newEncoder(ByteArrayOutputStream out) throws IOException {
       return new EncoderFactory().configureBlockSize(254).blockingBinaryEncoder(out, null);
@@ -1722,7 +1787,7 @@ public class Perf {
 
     Rec1() {
     }
-    
+
     Rec1(Random r) {
       d1 = r.nextDouble();
       d11 = r.nextDouble();

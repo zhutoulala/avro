@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -34,8 +34,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.apache.avro.Conversion;
+import org.apache.avro.Conversions;
+import org.apache.avro.LogicalTypes;
+import org.apache.avro.data.Jsr310TimeConversions;
+import org.apache.avro.data.TimeConversions;
 import org.apache.avro.specific.SpecificData;
-import org.codehaus.jackson.JsonNode;
 
 import org.apache.avro.Protocol;
 import org.apache.avro.Protocol.Message;
@@ -48,8 +52,6 @@ import org.apache.avro.generic.GenericData.StringType;
 import org.apache.velocity.Template;
 import org.apache.velocity.VelocityContext;
 import org.apache.velocity.app.VelocityEngine;
-import org.apache.velocity.runtime.RuntimeServices;
-import org.apache.velocity.runtime.log.LogChute;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -61,45 +63,106 @@ import static org.apache.avro.specific.SpecificData.RESERVED_WORDS;
  * Java reserved keywords are mangled to preserve compilation.
  */
 public class SpecificCompiler {
-  public static enum FieldVisibility {
+
+  /*
+   * From Section 4.10 of the Java VM Specification:
+   *    A method descriptor is valid only if it represents method parameters with a total length of 255 or less,
+   *    where that length includes the contribution for this in the case of instance or interface method invocations.
+   *    The total length is calculated by summing the contributions of the individual parameters, where a parameter
+   *    of type long or double contributes two units to the length and a parameter of any other type contributes one unit.
+   *
+   * Arguments of type Double/Float contribute 2 "parameter units" to this limit, all other types contribute 1
+   * "parameter unit". All instance methods for a class are passed a reference to the instance (`this), and hence,
+   * they are permitted at most `JVM_METHOD_ARG_LIMIT-1` "parameter units" for their arguments.
+   *
+   * @see <a href="http://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.10">JVM Spec: Section 4.10</a>
+   */
+  private static final int JVM_METHOD_ARG_LIMIT = 255;
+
+  /*
+   * Note: This is protected instead of private only so it's visible for testing.
+   */
+  protected static final int MAX_FIELD_PARAMETER_UNIT_COUNT = JVM_METHOD_ARG_LIMIT - 1;
+
+  public enum FieldVisibility {
     PUBLIC, PUBLIC_DEPRECATED, PRIVATE
   }
 
-  private final Set<Schema> queue = new HashSet<Schema>();
+  public enum DateTimeLogicalTypeImplementation {
+    JODA {
+      @Override
+      void addLogicalTypeConversions(SpecificData specificData) {
+        specificData.addLogicalTypeConversion(new TimeConversions.DateConversion());
+        specificData.addLogicalTypeConversion(new TimeConversions.TimeConversion());
+        specificData.addLogicalTypeConversion(new TimeConversions.TimestampConversion());
+      }
+    },
+    JSR310 {
+      @Override
+      void addLogicalTypeConversions(SpecificData specificData) {
+        specificData.addLogicalTypeConversion(new Jsr310TimeConversions.DateConversion());
+        specificData.addLogicalTypeConversion(new Jsr310TimeConversions.TimeMillisConversion());
+        specificData.addLogicalTypeConversion(new Jsr310TimeConversions.TimestampMillisConversion());
+      }
+    };
+
+    public static final DateTimeLogicalTypeImplementation DEFAULT = JODA;
+
+    abstract void addLogicalTypeConversions(SpecificData specificData);
+  }
+
+  private final SpecificData specificData = new SpecificData();
+
+  private final Set<Schema> queue = new HashSet<>();
   private Protocol protocol;
   private VelocityEngine velocityEngine;
   private String templateDir;
   private FieldVisibility fieldVisibility = FieldVisibility.PUBLIC_DEPRECATED;
   private boolean createSetters = true;
+  private boolean createAllArgsConstructor = true;
   private String outputCharacterEncoding;
+  private boolean enableDecimalLogicalType = false;
+  private final DateTimeLogicalTypeImplementation dateTimeLogicalTypeImplementation;
+  private String suffix = ".java";
+
+  /*
+   * Used in the record.vm template.
+   */
+  public boolean isCreateAllArgsConstructor() {
+    return createAllArgsConstructor;
+  }
 
   /* Reserved words for accessor/mutator methods */
-  private static final Set<String> ACCESSOR_MUTATOR_RESERVED_WORDS = 
-      new HashSet<String>(Arrays.asList(new String[] {
+  private static final Set<String> ACCESSOR_MUTATOR_RESERVED_WORDS =
+      new HashSet<>(Arrays.asList(new String[]{
             "class", "schema", "classSchema"
           }));
   static {
     // Add reserved words to accessor/mutator reserved words
     ACCESSOR_MUTATOR_RESERVED_WORDS.addAll(RESERVED_WORDS);
   }
-  
+
   /* Reserved words for error types */
-  private static final Set<String> ERROR_RESERVED_WORDS = new HashSet<String>(
-      Arrays.asList(new String[] { "message", "cause" }));
+  private static final Set<String> ERROR_RESERVED_WORDS = new HashSet<>(
+      Arrays.asList(new String[]{"message", "cause"}));
   static {
     // Add accessor/mutator reserved words to error reserved words
     ERROR_RESERVED_WORDS.addAll(ACCESSOR_MUTATOR_RESERVED_WORDS);
   }
-  
-  private static final String FILE_HEADER = 
+
+  private static final String FILE_HEADER =
       "/**\n" +
       " * Autogenerated by Avro\n" +
-      " * \n" +
+      " *\n" +
       " * DO NOT EDIT DIRECTLY\n" +
       " */\n";
-  
+
   public SpecificCompiler(Protocol protocol) {
-    this();
+    this(protocol, DateTimeLogicalTypeImplementation.JODA);
+  }
+
+  public SpecificCompiler(Protocol protocol, DateTimeLogicalTypeImplementation dateTimeLogicalTypeImplementation) {
+    this(dateTimeLogicalTypeImplementation);
     // enqueue all types
     for (Schema s : protocol.getTypes()) {
       enqueue(s);
@@ -108,16 +171,38 @@ public class SpecificCompiler {
   }
 
   public SpecificCompiler(Schema schema) {
-    this();
+    this(schema, DateTimeLogicalTypeImplementation.JODA);
+  }
+
+  public SpecificCompiler(Schema schema, DateTimeLogicalTypeImplementation dateTimeLogicalTypeImplementation) {
+    this(dateTimeLogicalTypeImplementation);
     enqueue(schema);
     this.protocol = null;
   }
-  
+
+  /**
+   * Creates a specific compiler with the default (Joda) type for date/time related logical types.
+   *
+   * @see #SpecificCompiler(DateTimeLogicalTypeImplementation)
+   */
   SpecificCompiler() {
+    this(DateTimeLogicalTypeImplementation.JODA);
+  }
+
+  /**
+   * Creates a specific compiler with the given type to use for date/time related logical types.
+   * Use {@link DateTimeLogicalTypeImplementation#JODA} to generate Joda Time classes, use {@link DateTimeLogicalTypeImplementation#JSR310}
+   * to generate {@code java.time.*} classes for the date/time local types.
+   *
+   * @param dateTimeLogicalTypeImplementation the types used for date/time related logical types
+   */
+  SpecificCompiler(DateTimeLogicalTypeImplementation dateTimeLogicalTypeImplementation) {
+    this.dateTimeLogicalTypeImplementation = dateTimeLogicalTypeImplementation;
     this.templateDir =
       System.getProperty("org.apache.avro.specific.templates",
                          "/org/apache/avro/compiler/specific/templates/java/classic/");
     initializeVelocity();
+    initializeSpecificData();
   }
 
   /** Set the resource directory where templates reside. First, the compiler checks
@@ -125,6 +210,11 @@ public class SpecificCompiler {
    * present on the classpath.*/
   public void setTemplateDir(String templateDir) {
     this.templateDir = templateDir;
+  }
+
+  /** Set the resource file suffix, .java or .xxx */
+  public void setSuffix(String suffix) {
+    this.suffix = suffix;
   }
 
   /**
@@ -167,7 +257,17 @@ public class SpecificCompiler {
     this.createSetters = createSetters;
   }
 
-  private static String logChuteName = null;
+  /**
+   * Set to true to use {@link java.math.BigDecimal} instead of
+   * {@link java.nio.ByteBuffer} for logical type "decimal"
+   */
+  public void setEnableDecimalLogicalType(boolean enableDecimalLogicalType) {
+    this.enableDecimalLogicalType = enableDecimalLogicalType;
+  }
+
+  public DateTimeLogicalTypeImplementation getDateTimeLogicalTypeImplementation() {
+    return dateTimeLogicalTypeImplementation;
+  }
 
   private void initializeVelocity() {
     this.velocityEngine = new VelocityEngine();
@@ -177,22 +277,19 @@ public class SpecificCompiler {
     velocityEngine.addProperty("resource.loader", "class, file");
     velocityEngine.addProperty("class.resource.loader.class",
         "org.apache.velocity.runtime.resource.loader.ClasspathResourceLoader");
-    velocityEngine.addProperty("file.resource.loader.class", 
+    velocityEngine.addProperty("file.resource.loader.class",
         "org.apache.velocity.runtime.resource.loader.FileResourceLoader");
     velocityEngine.addProperty("file.resource.loader.path", "/, .");
     velocityEngine.setProperty("runtime.references.strict", true);
 
-    // try to use Slf4jLogChute, but if we can't use the null one.
-    if (null == logChuteName) {
-      // multiple threads can get here concurrently, but that's ok.
-      try {
-        new Slf4jLogChute();
-        logChuteName = Slf4jLogChute.class.getName();
-      } catch (Exception e) {
-        logChuteName = "org.apache.velocity.runtime.log.NullLogChute";
-      }
-    }
-    velocityEngine.setProperty("runtime.log.logsystem.class", logChuteName);
+    // Set whitespace gobbling to Backward Compatible (BC)
+    // http://velocity.apache.org/engine/2.0/developer-guide.html#space-gobbling
+    velocityEngine.setProperty("space.gobbling", "bc");
+  }
+
+  private void initializeSpecificData() {
+    dateTimeLogicalTypeImplementation.addLogicalTypeConversions(specificData);
+    specificData.addLogicalTypeConversion(new Conversions.DecimalConversion());
   }
 
   /**
@@ -212,17 +309,22 @@ public class SpecificCompiler {
       if (src != null && f.exists() && f.lastModified() >= src.lastModified())
         return f;                                 // already up to date: ignore
       f.getParentFile().mkdirs();
-      Writer fw;
-      if (outputCharacterEncoding != null) {
-        fw = new OutputStreamWriter(new FileOutputStream(f), outputCharacterEncoding);
-      } else {
-        fw = new FileWriter(f);
-      }
+      Writer fw = null;
+      FileOutputStream fos = null;
       try {
+        if (outputCharacterEncoding != null) {
+          fos = new FileOutputStream(f);
+          fw = new OutputStreamWriter(fos, outputCharacterEncoding);
+        } else {
+          fw = new FileWriter(f);
+        }
         fw.write(FILE_HEADER);
         fw.write(contents);
       } finally {
-        fw.close();
+        if (fw != null)
+          fw.close();
+        if (fos != null)
+          fos.close();
       }
       return f;
     }
@@ -261,7 +363,7 @@ public class SpecificCompiler {
 
     for (File src : srcFiles) {
       Schema schema = parser.parse(src);
-      SpecificCompiler compiler = new SpecificCompiler(schema);
+      SpecificCompiler compiler = new SpecificCompiler(schema, DateTimeLogicalTypeImplementation.JODA);
       compiler.compileToDestination(src, dest);
     }
   }
@@ -300,7 +402,7 @@ public class SpecificCompiler {
 
   /** Generate java classes for enqueued schemas. */
   Collection<OutputFile> compile() {
-    List<OutputFile> out = new ArrayList<OutputFile>();
+    List<OutputFile> out = new ArrayList<>();
     for (Schema schema : queue) {
       out.add(compile(schema));
     }
@@ -348,12 +450,42 @@ public class SpecificCompiler {
     return outputFile;
   }
 
-  static String makePath(String name, String space) {
+  //package private for testing purposes
+  String makePath(String name, String space) {
     if (space == null || space.isEmpty()) {
-      return name + ".java";
+      return name + suffix;
     } else {
       return space.replace('.', File.separatorChar) + File.separatorChar + name
-          + ".java";
+          + suffix;
+    }
+  }
+
+  /**
+   * Returns the number of parameter units required by fields for the
+   * AllArgsConstructor.
+   *
+   * @param record a Record schema
+   */
+  protected int calcAllArgConstructorParameterUnits(Schema record) {
+
+    if (record.getType() != Schema.Type.RECORD)
+      throw new RuntimeException("This method must only be called for record schemas.");
+
+    return record.getFields().size();
+  }
+
+  protected void validateRecordForCompilation(Schema record) {
+    this.createAllArgsConstructor =
+        calcAllArgConstructorParameterUnits(record) <= MAX_FIELD_PARAMETER_UNIT_COUNT;
+
+    if (!this.createAllArgsConstructor) {
+      Logger logger = LoggerFactory.getLogger(SpecificCompiler.class);
+      logger.warn("Record '" + record.getFullName() +
+        "' contains more than " + MAX_FIELD_PARAMETER_UNIT_COUNT +
+        " parameters which exceeds the JVM " +
+        "spec for the number of permitted constructor arguments. Clients must " +
+        "rely on the builder pattern to create objects instead. For more info " +
+        "see JIRA ticket AVRO-1642.");
     }
   }
 
@@ -366,6 +498,7 @@ public class SpecificCompiler {
 
     switch (schema.getType()) {
     case RECORD:
+      validateRecordForCompilation(schema);
       output = renderTemplate(templateDir+"record.vm", context);
       break;
     case ENUM:
@@ -399,14 +532,14 @@ public class SpecificCompiler {
       return p;
 
     Protocol newP = new Protocol(p.getName(), p.getDoc(), p.getNamespace());
-    Map<Schema,Schema> types = new LinkedHashMap<Schema,Schema>();
+    Map<Schema,Schema> types = new LinkedHashMap<>();
 
-    // Copy properties
-    for (Map.Entry<String,JsonNode> prop : p.getJsonProps().entrySet())
-      newP.addProp(prop.getKey(), prop.getValue());   // copy props
+    for (Map.Entry<String, Object> a : p.getObjectProps().entrySet()) {
+      newP.addProp(a.getKey(), a.getValue());
+    }
 
     // annotate types
-    Collection<Schema> namedTypes = new LinkedHashSet<Schema>();
+    Collection<Schema> namedTypes = new LinkedHashSet<>();
     for (Schema s : p.getTypes())
       namedTypes.add(addStringType(s, types));
     newP.setTypes(namedTypes);
@@ -415,9 +548,9 @@ public class SpecificCompiler {
     Map<String,Message> newM = newP.getMessages();
     for (Message m : p.getMessages().values())
       newM.put(m.getName(), m.isOneWay()
-               ? newP.createMessage(m.getName(), m.getDoc(), m.getJsonProps(),
+               ? newP.createMessage(m,
                                     addStringType(m.getRequest(), types))
-               : newP.createMessage(m.getName(), m.getDoc(), m.getJsonProps(),
+               : newP.createMessage(m,
                                     addStringType(m.getRequest(), types),
                                     addStringType(m.getResponse(), types),
                                     addStringType(m.getErrors(), types)));
@@ -427,7 +560,7 @@ public class SpecificCompiler {
   private Schema addStringType(Schema s) {
     if (stringType != StringType.String)
       return s;
-    return addStringType(s, new LinkedHashMap<Schema,Schema>());
+    return addStringType(s, new LinkedHashMap<>());
   }
 
   // annotate map and string schemas with string type
@@ -445,15 +578,10 @@ public class SpecificCompiler {
       for (String alias : s.getAliases())
         result.addAlias(alias, null);             // copy aliases
       seen.put(s, result);
-      List<Field> newFields = new ArrayList<Field>();
+      List<Field> newFields = new ArrayList<>();
       for (Field f : s.getFields()) {
         Schema fSchema = addStringType(f.schema(), seen);
-        Field newF =
-          new Field(f.name(), fSchema, f.doc(), f.defaultValue(), f.order());
-        for (Map.Entry<String,JsonNode> p : f.getJsonProps().entrySet())
-          newF.addProp(p.getKey(), p.getValue()); // copy props
-        for (String a : f.aliases())
-          newF.addAlias(a);                       // copy aliases
+        Field newF = new Field(f, fSchema);
         newFields.add(newF);
       }
       result.setFields(newFields);
@@ -468,33 +596,72 @@ public class SpecificCompiler {
       GenericData.setStringType(result, stringType);
       break;
     case UNION:
-      List<Schema> types = new ArrayList<Schema>();
+      List<Schema> types = new ArrayList<>();
       for (Schema branch : s.getTypes())
         types.add(addStringType(branch, seen));
       result = Schema.createUnion(types);
       break;
     }
-    for (Map.Entry<String,JsonNode> p : s.getJsonProps().entrySet())
-      result.addProp(p.getKey(), p.getValue());   // copy props
+    result.addAllProps(s);
     seen.put(s, result);
     return result;
   }
 
-  private String getStringType(JsonNode overrideClassProperty) {
+  /** Utility for template use (and also internal use).  Returns
+    * a string giving the FQN of the Java type to be used for a string
+    * schema or for the key of a map schema.  (It's an error to call
+    * this on a schema other than a string or map.) */
+  public String getStringType(Schema s) {
+    String prop;
+    switch (s.getType()) {
+    case MAP:
+      prop = SpecificData.KEY_CLASS_PROP;
+      break;
+    case STRING:
+      prop = SpecificData.CLASS_PROP;
+      break;
+    default:
+      throw new IllegalArgumentException("Can't check string-type of non-string/map type: " + s);
+    }
+    return getStringType(s.getObjectProp(prop));
+  }
+  private String getStringType(Object overrideClassProperty) {
     if (overrideClassProperty != null)
-      return overrideClassProperty.getTextValue();
+      return overrideClassProperty.toString();
     switch (stringType) {
     case String:        return "java.lang.String";
     case Utf8:          return "org.apache.avro.util.Utf8";
     case CharSequence:  return "java.lang.CharSequence";
     default: throw new RuntimeException("Unknown string type: "+stringType);
-   }
+    }
   }
- 
+
+  /** Utility for template use.  Returns true iff a STRING-schema or
+    * the key of a MAP-schema is what SpecificData defines as
+    * "stringable" (which means we need to call toString on it before
+    * before writing it). */
+  public boolean isStringable(Schema schema) {
+    String t = getStringType(schema);
+    return ! (t.equals("java.lang.String")
+              || t.equals("java.lang.CharSequence")
+              || t.equals("org.apache.avro.util.Utf8"));
+  }
+
   private static final Schema NULL_SCHEMA = Schema.create(Schema.Type.NULL);
 
   /** Utility for template use.  Returns the java type for a Schema. */
   public String javaType(Schema schema) {
+    return javaType(schema, true);
+  }
+
+  private String javaType(Schema schema, boolean checkConvertedLogicalType) {
+    if (checkConvertedLogicalType) {
+      String convertedLogicalType = getConvertedLogicalType(schema);
+      if (convertedLogicalType != null) {
+        return convertedLogicalType;
+      }
+    }
+
     switch (schema.getType()) {
     case RECORD:
     case ENUM:
@@ -504,7 +671,7 @@ public class SpecificCompiler {
       return "java.util.List<" + javaType(schema.getElementType()) + ">";
     case MAP:
       return "java.util.Map<"
-        + getStringType(schema.getJsonProp(SpecificData.KEY_CLASS_PROP))+","
+        + getStringType(schema.getObjectProp(SpecificData.KEY_CLASS_PROP))+","
         + javaType(schema.getValueType()) + ">";
     case UNION:
       List<Schema> types = schema.getTypes(); // elide unions with null
@@ -512,7 +679,7 @@ public class SpecificCompiler {
         return javaType(types.get(types.get(0).equals(NULL_SCHEMA) ? 1 : 0));
       return "java.lang.Object";
     case STRING:
-      return getStringType(schema.getJsonProp(SpecificData.CLASS_PROP));
+      return getStringType(schema.getObjectProp(SpecificData.CLASS_PROP));
     case BYTES:   return "java.nio.ByteBuffer";
     case INT:     return "java.lang.Integer";
     case LONG:    return "java.lang.Long";
@@ -524,31 +691,127 @@ public class SpecificCompiler {
     }
   }
 
+  private String getConvertedLogicalType(Schema schema) {
+    if (enableDecimalLogicalType
+        || !(schema.getLogicalType() instanceof LogicalTypes.Decimal)) {
+      Conversion<?> conversion = specificData
+          .getConversionFor(schema.getLogicalType());
+      if (conversion != null) {
+        return conversion.getConvertedType().getName();
+      }
+    }
+    return null;
+  }
+
   /** Utility for template use.  Returns the unboxed java type for a Schema. */
   public String javaUnbox(Schema schema) {
-    switch (schema.getType()) {
-    case INT:     return "int";
-    case LONG:    return "long";
-    case FLOAT:   return "float";
-    case DOUBLE:  return "double";
-    case BOOLEAN: return "boolean";
-    default:      return javaType(schema);
+    String convertedLogicalType = getConvertedLogicalType(schema);
+    if (convertedLogicalType != null) {
+      return convertedLogicalType;
     }
+
+    switch (schema.getType()) {
+      case INT:     return "int";
+      case LONG:    return "long";
+      case FLOAT:   return "float";
+      case DOUBLE:  return "double";
+      case BOOLEAN: return "boolean";
+      default:      return javaType(schema, false);
+    }
+  }
+
+
+  /** Utility for template use.  Return a string with a given number
+    * of spaces to be used for indentation purposes. */
+  public String indent(int n) {
+    return new String(new char[n]).replace('\0', ' ');
+  }
+
+  /** Utility for template use.  For a two-branch union type with
+    * one null branch, returns the index of the null branch.  It's an
+    * error to use on anything other than a two-branch union with on
+    * null branch. */
+  public int getNonNullIndex(Schema s) {
+    if (s.getType() != Schema.Type.UNION
+        || s.getTypes().size() != 2
+        || ! s.getTypes().contains(NULL_SCHEMA))
+      throw new IllegalArgumentException("Can only be used on 2-branch union with a null branch: " + s);
+    return (s.getTypes().get(0).equals(NULL_SCHEMA) ? 1 : 0);
+  }
+
+  /** Utility for template use.  Returns true if the encode/decode
+    * logic in record.vm can handle the schema being presented. */
+  public boolean isCustomCodable(Schema schema) {
+    if (schema.isError()) return false;
+    return isCustomCodable(schema, new HashSet<Schema>());
+  }
+
+  private boolean isCustomCodable(Schema schema, Set<Schema> seen) {
+    if (! seen.add(schema)) return true;
+    if (schema.getLogicalType() != null) return false;
+    boolean result = true;
+    switch (schema.getType()) {
+    case RECORD:
+      for (Schema.Field f : schema.getFields())
+        result &= isCustomCodable(f.schema(), seen);
+      break;
+    case MAP:
+      result = isCustomCodable(schema.getValueType(), seen);
+      break;
+    case ARRAY:
+      result = isCustomCodable(schema.getElementType(), seen);
+      break;
+    case UNION:
+      List<Schema> types = schema.getTypes();
+      // Only know how to handle "nulling" unions for now
+      if (types.size() != 2 || ! types.contains(NULL_SCHEMA)) return false;
+      for (Schema s : types) result &= isCustomCodable(s, seen);
+      break;
+    default:
+    }
+    return result;
+  }
+
+  public boolean hasLogicalTypeField(Schema schema) {
+    for (Schema.Field field : schema.getFields()) {
+      if (field.schema().getLogicalType() != null) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public String conversionInstance(Schema schema) {
+    if (schema == null || schema.getLogicalType() == null) {
+      return "null";
+    }
+
+    if (LogicalTypes.date().equals(schema.getLogicalType())) {
+      return "DATE_CONVERSION";
+    } else if (LogicalTypes.timeMillis().equals(schema.getLogicalType())) {
+      return "TIME_CONVERSION";
+    } else if (LogicalTypes.timestampMillis().equals(schema.getLogicalType())) {
+      return "TIMESTAMP_CONVERSION";
+    } else if (LogicalTypes.Decimal.class.equals(schema.getLogicalType().getClass())) {
+      return enableDecimalLogicalType ? "DECIMAL_CONVERSION" : "null";
+    }
+
+    return "null";
   }
 
   /** Utility for template use.  Returns the java annotations for a schema. */
   public String[] javaAnnotations(JsonProperties props) {
-    JsonNode value = props.getJsonProp("javaAnnotation");
+    Object value = props.getObjectProp("javaAnnotation");
     if (value == null)
       return new String[0];
-    if (value.isTextual())
-      return new String[] { value.getTextValue() };
-    if (value.isArray()) {
-      int i = 0;
-      String[] result = new String[value.size()];
-      for (JsonNode v : value)
-        result[i++] = v.getTextValue();
-      return result;
+    if (value instanceof String)
+      return new String[] { value.toString() };
+    if (value instanceof List) {
+      List<?> list = (List<?>) value;
+      List<String> annots = new ArrayList<String>();
+      for (Object o : list)
+        annots.add(o.toString());
+      return annots.toArray(new String[annots.size()]);
     }
     return new String[0];
   }
@@ -571,7 +834,7 @@ public class SpecificCompiler {
     b.append("\"");                               // final quote
     return b.toString();
   }
-  
+
   /** Utility for template use.  Escapes quotes and backslashes. */
   public static String javaEscape(Object o) {
       return o.toString().replace("\\","\\\\").replace("\"", "\\\"");
@@ -581,7 +844,7 @@ public class SpecificCompiler {
   public static String escapeForJavadoc(String s) {
       return s.replace("*/", "*&#47;");
   }
-  
+
   /** Utility for template use.  Returns empty string for null. */
   public static String nullToEmpty(String x) {
     return x == null ? "" : x;
@@ -591,19 +854,19 @@ public class SpecificCompiler {
   public static String mangle(String word) {
     return mangle(word, false);
   }
-  
+
   /** Utility for template use.  Adds a dollar sign to reserved words. */
   public static String mangle(String word, boolean isError) {
     return mangle(word, isError ? ERROR_RESERVED_WORDS : RESERVED_WORDS);
   }
-  
+
   /** Utility for template use.  Adds a dollar sign to reserved words. */
   public static String mangle(String word, Set<String> reservedWords) {
     return mangle(word, reservedWords, false);
   }
-  
+
   /** Utility for template use.  Adds a dollar sign to reserved words. */
-  public static String mangle(String word, Set<String> reservedWords, 
+  public static String mangle(String word, Set<String> reservedWords,
       boolean isMethod) {
     if (word.contains(".")) {
       // If the 'word' is really a full path of a class we must mangle just the classname
@@ -612,15 +875,15 @@ public class SpecificCompiler {
       String className = word.substring(lastDot + 1);
       return packageName + mangle(className, reservedWords, isMethod);
     }
-    if (reservedWords.contains(word) || 
+    if (reservedWords.contains(word) ||
         (isMethod && reservedWords.contains(
-            Character.toLowerCase(word.charAt(0)) + 
+            Character.toLowerCase(word.charAt(0)) +
             ((word.length() > 1) ? word.substring(1) : "")))) {
       return word + "$";
     }
     return word;
   }
-  
+
   /** Utility for use by templates. Return schema fingerprint as a long. */
   public static long fingerprint64(Schema schema) {
     return SchemaNormalization.parsingFingerprint64(schema);
@@ -635,7 +898,7 @@ public class SpecificCompiler {
   public static String generateGetMethod(Schema schema, Field field) {
     return generateMethodName(schema, field, "get", "");
   }
-  
+
   /**
    * Generates the name of a field mutator method.
    * @param schema the schema in which the field is defined.
@@ -645,7 +908,7 @@ public class SpecificCompiler {
   public static String generateSetMethod(Schema schema, Field field) {
     return generateMethodName(schema, field, "set", "");
   }
-  
+
   /**
    * Generates the name of a field "has" method.
    * @param schema the schema in which the field is defined.
@@ -655,7 +918,7 @@ public class SpecificCompiler {
   public static String generateHasMethod(Schema schema, Field field) {
     return generateMethodName(schema, field, "has", "");
   }
-  
+
   /**
    * Generates the name of a field "clear" method.
    * @param schema the schema in which the field is defined.
@@ -665,7 +928,7 @@ public class SpecificCompiler {
   public static String generateClearMethod(Schema schema, Field field) {
     return generateMethodName(schema, field, "clear", "");
   }
-  
+
   /** Utility for use by templates. Does this schema have a Builder method? */
   public static boolean hasBuilder(Schema schema) {
     switch (schema.getType()) {
@@ -722,20 +985,20 @@ public class SpecificCompiler {
    * @param postfix method name postfix, e.g. "" or "Builder".
    * @return the generated method name.
    */
-  private static String generateMethodName(Schema schema, Field field, 
+  private static String generateMethodName(Schema schema, Field field,
       String prefix, String postfix) {
 
-    // Check for the special case in which the schema defines two fields whose 
+    // Check for the special case in which the schema defines two fields whose
     // names are identical except for the case of the first character:
     char firstChar = field.name().charAt(0);
     String conflictingFieldName = (Character.isLowerCase(firstChar) ?
         Character.toUpperCase(firstChar) : Character.toLowerCase(firstChar)) +
         (field.name().length() > 1 ? field.name().substring(1) : "");
     boolean fieldNameConflict = schema.getField(conflictingFieldName) != null;
-    
+
     StringBuilder methodBuilder = new StringBuilder(prefix);
-    String fieldName = mangle(field.name(), 
-        schema.isError() ? ERROR_RESERVED_WORDS : 
+    String fieldName = mangle(field.name(),
+        schema.isError() ? ERROR_RESERVED_WORDS :
           ACCESSOR_MUTATOR_RESERVED_WORDS, true);
 
     boolean nextCharToUpper = true;
@@ -752,7 +1015,7 @@ public class SpecificCompiler {
       }
     }
     methodBuilder.append(postfix);
-    
+
     // If there is a field name conflict append $0 or $1
     if (fieldNameConflict) {
       if (methodBuilder.charAt(methodBuilder.length() - 1) != '$') {
@@ -763,7 +1026,7 @@ public class SpecificCompiler {
 
     return methodBuilder.toString();
   }
-  
+
   /** Tests whether an unboxed Java type can be set to null */
   public static boolean isUnboxedJavaTypeNullable(Schema schema) {
     switch (schema.getType()) {
@@ -781,75 +1044,6 @@ public class SpecificCompiler {
     //compileSchema(new File(args[0]), new File(args[1]));
     compileProtocol(new File(args[0]), new File(args[1]));
   }
-  
-  public static final class Slf4jLogChute implements LogChute {
-    private Logger logger = LoggerFactory.getLogger("AvroVelocityLogChute");
-    @Override
-    public void init(RuntimeServices rs) throws Exception {
-      // nothing to do
-    }
-
-    @Override
-    public void log(int level, String message) {
-      switch (level) {
-      case LogChute.DEBUG_ID:
-        logger.debug(message);
-        break;
-      case LogChute.TRACE_ID:
-        logger.trace(message);
-        break;
-      case LogChute.WARN_ID:
-        logger.warn(message);
-        break;
-      case LogChute.ERROR_ID:
-        logger.error(message);
-        break;
-      default:
-      case LogChute.INFO_ID:
-        logger.info(message);
-        break;
-      }
-    }
-
-    @Override
-    public void log(int level, String message, Throwable t) {
-      switch (level) {
-      case LogChute.DEBUG_ID:
-        logger.debug(message, t);
-        break;
-      case LogChute.TRACE_ID:
-        logger.trace(message, t);
-        break;
-      case LogChute.WARN_ID:
-        logger.warn(message, t);
-        break;
-      case LogChute.ERROR_ID:
-        logger.error(message, t);
-        break;
-      default:
-      case LogChute.INFO_ID:
-        logger.info(message, t);
-        break;
-      }
-    }
-
-    @Override
-    public boolean isLevelEnabled(int level) {
-      switch (level) {
-      case LogChute.DEBUG_ID:
-        return logger.isDebugEnabled();
-      case LogChute.TRACE_ID:
-        return logger.isTraceEnabled();
-      case LogChute.WARN_ID:
-        return logger.isWarnEnabled();
-      case LogChute.ERROR_ID:
-        return logger.isErrorEnabled();
-      default:
-      case LogChute.INFO_ID:
-        return logger.isInfoEnabled();
-      }
-    }
-  }
 
   /** Sets character encoding for generated java file
   * @param outputCharacterEncoding Character encoding for output files (defaults to system encoding)
@@ -858,4 +1052,3 @@ public class SpecificCompiler {
     this.outputCharacterEncoding = outputCharacterEncoding;
   }
 }
-

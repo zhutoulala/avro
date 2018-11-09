@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -27,10 +27,10 @@ import org.apache.trevni.ColumnFileReader;
 import org.apache.trevni.ColumnMetaData;
 import org.apache.trevni.ColumnValues;
 
-import org.codehaus.jackson.JsonFactory;
-import org.codehaus.jackson.JsonGenerator;
-import org.codehaus.jackson.JsonEncoding;
-import org.codehaus.jackson.util.MinimalPrettyPrinter;
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonEncoding;
+import com.fasterxml.jackson.core.util.MinimalPrettyPrinter;
 
 /** Tool to read Trevni files and print them as JSON.
  * This can read any Trevni file.  Nested structure is reconstructed from the
@@ -68,7 +68,7 @@ public class TrevniToJsonTool implements Tool {
       err.println("Usage: [-pretty] input");
       return 1;
     }
-    
+
     toJson(TrevniUtil.input(filename), out, pretty);
 
     return 0;
@@ -109,7 +109,7 @@ public class TrevniToJsonTool implements Tool {
     out.println();
     reader.close();
   }
-  
+
   private void valueToJson(ColumnMetaData column) throws IOException {
     generator.writeFieldName(shortNames[column.getNumber()]);
     ColumnValues in = values[column.getNumber()];
@@ -138,7 +138,7 @@ public class TrevniToJsonTool implements Tool {
     }
   }
 
-  private void primitiveToJson(ColumnMetaData column, Object value) 
+  private void primitiveToJson(ColumnMetaData column, Object value)
     throws IOException {
     switch (column.getType()) {
     case NULL:

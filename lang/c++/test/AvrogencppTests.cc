@@ -27,6 +27,10 @@
 #include "recursive.hh"
 #include "circulardep.hh"
 #include "reuse.hh"
+#include "tree1.hh"
+#include "tree2.hh"
+#include "crossref.hh"
+#include "primitivetypes.hh"
 #include "Compiler.hh"
 
 #include <fstream>
@@ -126,14 +130,25 @@ void checkRecord(const T1& r1, const T2& r2)
     BOOST_CHECK_EQUAL(r1.bytes.size(), r2.bytes.size());
     BOOST_CHECK_EQUAL_COLLECTIONS(r1.bytes.begin(), r1.bytes.end(),
         r2.bytes.begin(), r2.bytes.end());
-    BOOST_CHECK(enumCompare(r1.myenum, r2.myenum));
+    /**
+     * Usually, comparing two different enums is not reliable. But here it fine because we
+     * know the generated code and are merely checking if Avro did the right job.
+     * Also, converting enum into unsigned int is not always safe. There are cases there could be
+     * truncation. Again, we have a controlled situation and it is safe here.
+     */
+    BOOST_CHECK_EQUAL(static_cast<unsigned int>(r1.myenum), static_cast<unsigned int>(r2.myenum));
 }
 
 void checkDefaultValues(const testgen_r::RootRecord& r)
 {
-    BOOST_CHECK_EQUAL(r.withDefaultValue.s1, "sval");
+    BOOST_CHECK_EQUAL(r.withDefaultValue.s1, "\"sval\"");
     BOOST_CHECK_EQUAL(r.withDefaultValue.i1, 99);
     BOOST_CHECK_CLOSE(r.withDefaultValue.d1, 5.67, 1e-10);
+    BOOST_CHECK_EQUAL(r.myarraywithDefaultValue[0], 2);
+    BOOST_CHECK_EQUAL(r.myarraywithDefaultValue[1], 3);
+    BOOST_CHECK_EQUAL(r.myfixedwithDefaultValue.get_val()[0], 0x01);
+    BOOST_CHECK_EQUAL(r.byteswithDefaultValue.get_bytes()[0], 0xff);
+    BOOST_CHECK_EQUAL(r.byteswithDefaultValue.get_bytes()[1], 0xaa);
 }
 
 void testEncoding()
@@ -192,6 +207,24 @@ void testResolution()
     checkRecord(t3, t1);
     checkDefaultValues(t3);
 
+    // Test serialization of default values.
+    // Serialize to string then compile from string.
+    std::ostringstream oss;
+    s_r.toJson(oss);
+    ValidSchema s_rs = avro::compileJsonSchemaFromString(oss.str());
+
+    auto_ptr<InputStream> is2 = memoryInputStream(*os);
+    dd->init(*is2);
+    rd = resolvingDecoder(s_w, s_rs, dd);
+    testgen_r::RootRecord t4;
+    avro::decode(*rd, t4);
+    checkDefaultValues(t4);
+
+    std::ostringstream oss_r;
+    std::ostringstream oss_rs;
+    s_r.toJson(oss_r);
+    s_rs.toJson(oss_rs);
+    BOOST_CHECK_EQUAL(oss_r.str(), oss_rs.str());
 }
 
 void testNamespace()

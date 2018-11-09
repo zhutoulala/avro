@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -36,14 +36,17 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+import org.apache.avro.util.internal.Accessor;
+import org.apache.avro.util.internal.Accessor.FieldAccessor;
 import org.apache.avro.util.internal.JacksonUtils;
-import org.codehaus.jackson.JsonFactory;
-import org.codehaus.jackson.JsonNode;
-import org.codehaus.jackson.JsonParseException;
-import org.codehaus.jackson.JsonParser;
-import org.codehaus.jackson.JsonGenerator;
-import org.codehaus.jackson.map.ObjectMapper;
-import org.codehaus.jackson.node.DoubleNode;
+
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParseException;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.DoubleNode;
 
 /** An abstract data type.
  * <p>A schema may be one of:
@@ -63,7 +66,7 @@ import org.codehaus.jackson.node.DoubleNode;
  * <li>A <i>boolean</i>; or
  * <li><i>null</i>.
  * </ul>
- * 
+ *
  * A schema can be constructed using one of its static <tt>createXXX</tt>
  * methods, or more conveniently using {@link SchemaBuilder}. The schema objects are
  * <i>logically</i> immutable.
@@ -102,7 +105,7 @@ public abstract class Schema extends JsonProperties {
   private LogicalType logicalType = null;
 
   Schema(Type type) {
-    super(SCHEMA_RESERVED);
+    super(type == Type.ENUM ? ENUM_RESERVED : SCHEMA_RESERVED);
     this.type = type;
   }
 
@@ -121,11 +124,16 @@ public abstract class Schema extends JsonProperties {
     }
   }
 
-  private static final Set<String> SCHEMA_RESERVED = new HashSet<String>();
+  private static final Set<String> SCHEMA_RESERVED = new HashSet<>();
   static {
     Collections.addAll(SCHEMA_RESERVED,
                        "doc", "fields", "items", "name", "namespace",
                        "size", "symbols", "values", "type", "aliases");
+  }
+  private static final Set<String> ENUM_RESERVED = new HashSet<>();
+  static {
+    ENUM_RESERVED.add("default");
+    ENUM_RESERVED.addAll(SCHEMA_RESERVED);
   }
 
   int hashCode = NO_HASHCODE;
@@ -171,7 +179,14 @@ public abstract class Schema extends JsonProperties {
   public static Schema createEnum(String name, String doc, String namespace,
                                   List<String> values) {
     return new EnumSchema(new Name(name, namespace), doc,
-        new LockableArrayList<String>(values));
+      new LockableArrayList<>(values), null);
+  }
+
+  /** Create an enum schema. */
+  public static Schema createEnum(String name, String doc, String namespace,
+                                  List<String> values, String enumDefault) {
+    return new EnumSchema(new Name(name, namespace), doc,
+        new LockableArrayList<>(values), enumDefault);
   }
 
   /** Create an array schema. */
@@ -186,12 +201,12 @@ public abstract class Schema extends JsonProperties {
 
   /** Create a union schema. */
   public static Schema createUnion(List<Schema> types) {
-    return new UnionSchema(new LockableArrayList<Schema>(types));
+    return new UnionSchema(new LockableArrayList<>(types));
   }
 
   /** Create a union schema. */
   public static Schema createUnion(Schema... types) {
-    return createUnion(new LockableArrayList<Schema>(types));
+    return createUnion(new LockableArrayList<>(types));
   }
 
   /** Create a union schema. */
@@ -231,13 +246,18 @@ public abstract class Schema extends JsonProperties {
   /** If this is an enum, return its symbols. */
   public List<String> getEnumSymbols() {
     throw new AvroRuntimeException("Not an enum: "+this);
-  }    
+  }
+
+  /** If this is an enum, return its default value. */
+  public String getEnumDefault() {
+    throw new AvroRuntimeException("Not an enum: "+this);
+  }
 
   /** If this is an enum, return a symbol's ordinal value. */
   public int getEnumOrdinal(String symbol) {
     throw new AvroRuntimeException("Not an enum: "+this);
-  }    
-  
+  }
+
   /** If this is an enum, returns true if it contains given symbol. */
   public boolean hasEnumSymbol(String symbol) {
     throw new AvroRuntimeException("Not an enum: "+this);
@@ -330,7 +350,7 @@ public abstract class Schema extends JsonProperties {
   }
 
   void toJson(Names names, JsonGenerator gen) throws IOException {
-    if (props.size() == 0) {                      // no props defined
+    if (!hasProps()) {                      // no props defined
       gen.writeString(getName());                 // just write name
     } else {
       gen.writeStartObject();
@@ -349,7 +369,7 @@ public abstract class Schema extends JsonProperties {
     if (!(o instanceof Schema)) return false;
     Schema that = (Schema)o;
     if (!(this.type == that.type)) return false;
-    return equalCachedHash(that) && props.equals(that.props);
+    return equalCachedHash(that) && propsEqual(that);
   }
   public final int hashCode() {
     if (hashCode == NO_HASHCODE)
@@ -357,7 +377,7 @@ public abstract class Schema extends JsonProperties {
     return hashCode;
   }
 
-  int computeHash() { return getType().hashCode() + props.hashCode(); }
+  int computeHash() { return getType().hashCode() + propsHashCode(); }
 
   final boolean equalCachedHash(Schema other) {
     return (hashCode == other.hashCode)
@@ -365,7 +385,7 @@ public abstract class Schema extends JsonProperties {
            || (other.hashCode == NO_HASHCODE);
   }
 
-  private static final Set<String> FIELD_RESERVED = new HashSet<String>();
+  private static final Set<String> FIELD_RESERVED = new HashSet<>();
   static {
     Collections.addAll(FIELD_RESERVED,
                        "default","doc","name","order","type","aliases");
@@ -373,6 +393,25 @@ public abstract class Schema extends JsonProperties {
 
   /** A field within a record. */
   public static class Field extends JsonProperties {
+
+    static {
+      Accessor.setAccessor(new FieldAccessor() {
+        @Override
+        protected JsonNode defaultValue(Field field) {
+          return field.defaultValue();
+        }
+
+        @Override
+        protected Field createField(String name, Schema schema, String doc, JsonNode defaultValue) {
+          return new Field(name, schema, doc, defaultValue);
+        }
+
+        @Override
+        protected Field createField(String name, Schema schema, String doc, JsonNode defaultValue, boolean validate, Order order) {
+          return new Field(name, schema, doc, defaultValue, validate, order);
+        }
+      });
+    }
 
     /** How values of this field should be ordered when sorting records. */
     public enum Order {
@@ -389,22 +428,39 @@ public abstract class Schema extends JsonProperties {
     private final Order order;
     private Set<String> aliases;
 
-    /** @deprecated use {@link #Field(String, Schema, String, Object)} */
-    @Deprecated
-    public Field(String name, Schema schema, String doc,
+    Field(String name, Schema schema, String doc,
         JsonNode defaultValue) {
       this(name, schema, doc, defaultValue, Order.ASCENDING);
     }
+
     /** @deprecated use {@link #Field(String, Schema, String, Object, Order)} */
     @Deprecated
     public Field(String name, Schema schema, String doc,
         JsonNode defaultValue, Order order) {
+      this(name, schema, doc, defaultValue, true, order);
+    }
+    public Field(String name, Schema schema, String doc,
+                 JsonNode defaultValue, boolean validateDefault, Order order) {
       super(FIELD_RESERVED);
       this.name = validateName(name);
       this.schema = schema;
       this.doc = doc;
-      this.defaultValue = validateDefault(name, schema, defaultValue);
+      this.defaultValue = validateDefault
+        ? validateDefault(name, schema, defaultValue)
+        : defaultValue;
       this.order = order;
+    }
+
+    /**
+     * Constructs a new Field instance with the same {@code name}, {@code doc}, {@code defaultValue}, and {@code order}
+     * as {@code field} has with changing the schema to the specified one. It also copies all the {@code props} and
+     * {@code aliases}.
+     */
+    public Field(Field field, Schema schema) {
+      this(field.name, schema, field.doc, field.defaultValue, field.order);
+      putAll(field);
+      if (field.aliases != null)
+        aliases = new LinkedHashSet<String>(field.aliases);
     }
     /**
      * @param defaultValue the default value for this field specified using the mapping
@@ -429,21 +485,20 @@ public abstract class Schema extends JsonProperties {
     public Schema schema() { return schema; }
     /** Field's documentation within the record, if set. May return null. */
     public String doc() { return doc; }
-    /** @deprecated use {@link #defaultVal() } */
-    @Deprecated public JsonNode defaultValue() { return defaultValue; }
+    JsonNode defaultValue() { return defaultValue; }
     /**
      * @return the default value for this field specified using the mapping
      *  in {@link JsonProperties}
      */
-    public Object defaultVal() { return JacksonUtils.toObject(defaultValue); }
+    public Object defaultVal() { return JacksonUtils.toObject(defaultValue, schema); }
     public Order order() { return order; }
     @Deprecated public Map<String,String> props() { return getProps(); }
     public void addAlias(String alias) {
       if (aliases == null)
-        this.aliases = new LinkedHashSet<String>();
+        this.aliases = new LinkedHashSet<>();
       aliases.add(alias);
     }
-    /** Return the defined aliases as an unmodifieable Set. */
+    /** Return the defined aliases as an unmodifiable Set. */
     public Set<String> aliases() {
       if (aliases == null)
         return Collections.emptySet();
@@ -457,15 +512,17 @@ public abstract class Schema extends JsonProperties {
         (schema.equals(that.schema)) &&
         defaultValueEquals(that.defaultValue) &&
         (order == that.order) &&
-        props.equals(that.props);
+        propsEqual(that);
     }
     public int hashCode() { return name.hashCode() + schema.computeHash(); }
-    
+
     private boolean defaultValueEquals(JsonNode thatDefaultValue) {
       if (defaultValue == null)
         return thatDefaultValue == null;
-      if (Double.isNaN(defaultValue.getDoubleValue()))
-        return Double.isNaN(thatDefaultValue.getDoubleValue());
+      if (thatDefaultValue == null)
+        return false;
+      if (Double.isNaN(defaultValue.doubleValue()))
+        return Double.isNaN(thatDefaultValue.doubleValue());
       return defaultValue.equals(thatDefaultValue);
     }
 
@@ -541,13 +598,13 @@ public abstract class Schema extends JsonProperties {
     }
     public void addAlias(String name, String space) {
       if (aliases == null)
-        this.aliases = new LinkedHashSet<Name>();
+        this.aliases = new LinkedHashSet<>();
       if (space == null)
         space = this.name.space;
       aliases.add(new Name(name, space));
     }
     public Set<String> getAliases() {
-      Set<String> result = new LinkedHashSet<String>();
+      Set<String> result = new LinkedHashSet<>();
       if (aliases != null)
         for (Name alias : aliases)
           result.add(alias.full);
@@ -587,6 +644,7 @@ public abstract class Schema extends JsonProperties {
     private Object s1; private Object s2;
     private SeenPair(Object s1, Object s2) { this.s1 = s1; this.s2 = s2; }
     public boolean equals(Object o) {
+      if (!(o instanceof SeenPair)) return false;
       return this.s1 == ((SeenPair)o).s1 && this.s2 == ((SeenPair)o).s2;
     }
     public int hashCode() {
@@ -640,7 +698,7 @@ public abstract class Schema extends JsonProperties {
         throw new AvroRuntimeException("Fields are already set");
       }
       int i = 0;
-      fieldMap = new HashMap<String, Field>();
+      fieldMap = new HashMap<>();
       LockableArrayList ff = new LockableArrayList();
       for (Field f : fields) {
         if (f.position != -1)
@@ -663,7 +721,7 @@ public abstract class Schema extends JsonProperties {
       RecordSchema that = (RecordSchema)o;
       if (!equalCachedHash(that)) return false;
       if (!equalNames(that)) return false;
-      if (!props.equals(that.props)) return false;
+      if (!propsEqual(that)) return false;
       Set seen = SEEN_EQUALS.get();
       SeenPair here = new SeenPair(this, o);
       if (seen.contains(here)) return true;       // prevent stack overflow
@@ -739,15 +797,19 @@ public abstract class Schema extends JsonProperties {
   private static class EnumSchema extends NamedSchema {
     private final List<String> symbols;
     private final Map<String,Integer> ordinals;
+    private final String enumDefault;
     public EnumSchema(Name name, String doc,
-        LockableArrayList<String> symbols) {
+        LockableArrayList<String> symbols, String enumDefault) {
       super(Type.ENUM, name, doc);
       this.symbols = symbols.lock();
-      this.ordinals = new HashMap<String,Integer>();
+      this.ordinals = new HashMap<>();
+      this.enumDefault = enumDefault;
       int i = 0;
       for (String symbol : symbols)
         if (ordinals.put(validateName(symbol), i++) != null)
           throw new SchemaParseException("Duplicate enum symbol: "+symbol);
+      if (enumDefault != null && !symbols.contains(enumDefault))
+        throw new SchemaParseException("The Enum Default: " + enumDefault + " is not in the enum symbol set: " + symbols);
     }
     public List<String> getEnumSymbols() { return symbols; }
     public boolean hasEnumSymbol(String symbol) {
@@ -760,8 +822,10 @@ public abstract class Schema extends JsonProperties {
       return equalCachedHash(that)
         && equalNames(that)
         && symbols.equals(that.symbols)
-        && props.equals(that.props);
+        && propsEqual(that);
     }
+    @Override
+    public String getEnumDefault() { return enumDefault; }
     @Override int computeHash() { return super.computeHash() + symbols.hashCode(); }
     void toJson(Names names, JsonGenerator gen) throws IOException {
       if (writeNameRef(names, gen)) return;
@@ -774,6 +838,8 @@ public abstract class Schema extends JsonProperties {
       for (String symbol : symbols)
         gen.writeString(symbol);
       gen.writeEndArray();
+      if (getEnumDefault() != null)
+        gen.writeStringField("default", getEnumDefault());
       writeProps(gen);
       aliasesToJson(gen);
       gen.writeEndObject();
@@ -793,7 +859,7 @@ public abstract class Schema extends JsonProperties {
       ArraySchema that = (ArraySchema)o;
       return equalCachedHash(that)
         && elementType.equals(that.elementType)
-        && props.equals(that.props);
+        && propsEqual(that);
     }
     @Override int computeHash() {
       return super.computeHash() + elementType.computeHash();
@@ -821,7 +887,7 @@ public abstract class Schema extends JsonProperties {
       MapSchema that = (MapSchema)o;
       return equalCachedHash(that)
         && valueType.equals(that.valueType)
-        && props.equals(that.props);
+        && propsEqual(that);
     }
     @Override int computeHash() {
       return super.computeHash() + valueType.computeHash();
@@ -839,7 +905,7 @@ public abstract class Schema extends JsonProperties {
   private static class UnionSchema extends Schema {
     private final List<Schema> types;
     private final Map<String,Integer> indexByName
-      = new HashMap<String,Integer>();
+      = new HashMap<>();
     public UnionSchema(LockableArrayList<Schema> types) {
       super(Type.UNION);
       this.types = types.lock();
@@ -862,7 +928,7 @@ public abstract class Schema extends JsonProperties {
       UnionSchema that = (UnionSchema)o;
       return equalCachedHash(that)
         && types.equals(that.types)
-        && props.equals(that.props);
+        && propsEqual(that);
     }
     @Override int computeHash() {
       int hash = super.computeHash();
@@ -870,12 +936,12 @@ public abstract class Schema extends JsonProperties {
         hash += type.computeHash();
       return hash;
     }
-    
+
     @Override
     public void addProp(String name, String value) {
       throw new AvroRuntimeException("Can't set properties on a union: "+this);
     }
-    
+
     void toJson(Names names, JsonGenerator gen) throws IOException {
       gen.writeStartArray();
       for (Schema type : types)
@@ -900,7 +966,7 @@ public abstract class Schema extends JsonProperties {
       return equalCachedHash(that)
         && equalNames(that)
         && size == that.size
-        && props.equals(that.props);
+        && propsEqual(that);
     }
     @Override int computeHash() { return super.computeHash() + size; }
     void toJson(Names names, JsonGenerator gen) throws IOException {
@@ -944,7 +1010,7 @@ public abstract class Schema extends JsonProperties {
   private static class BooleanSchema extends Schema {
     public BooleanSchema() { super(Type.BOOLEAN); }
   }
-  
+
   private static class NullSchema extends Schema {
     public NullSchema() { super(Type.NULL); }
   }
@@ -955,7 +1021,7 @@ public abstract class Schema extends JsonProperties {
   public static class Parser {
     private Names names = new Names();
     private boolean validate = true;
-    private boolean validateDefaults = false;
+    private boolean validateDefaults = true;
 
     /** Adds the provided types to the set of defined, named types known to
      * this parser. */
@@ -967,7 +1033,7 @@ public abstract class Schema extends JsonProperties {
 
     /** Returns the set of defined, named types known to this parser. */
     public Map<String,Schema> getTypes() {
-      Map<String,Schema> result = new LinkedHashMap<String,Schema>();
+      Map<String,Schema> result = new LinkedHashMap<>();
       for (Schema s : names.values())
         result.put(s.getFullName(), s);
       return result;
@@ -1012,7 +1078,7 @@ public abstract class Schema extends JsonProperties {
         b.append(part);
       return parse(b.toString());
     }
-      
+
     /** Parse a schema from the provided string.
      * If named, the schema is added to the names known to this parser. */
     public Schema parse(String s) {
@@ -1045,8 +1111,7 @@ public abstract class Schema extends JsonProperties {
    * The contents of <tt>file</tt> is expected to be in UTF-8 format.
    * @param file  The file to read the schema from.
    * @return  The freshly built Schema.
-   * @throws IOException if there was trouble reading the contents
-   * @throws JsonParseException if the contents are invalid
+   * @throws IOException if there was trouble reading the contents or they are invalid
    * @deprecated use {@link Schema.Parser} instead.
    */
   public static Schema parse(File file) throws IOException {
@@ -1058,8 +1123,7 @@ public abstract class Schema extends JsonProperties {
    * The contents of <tt>in</tt> is expected to be in UTF-8 format.
    * @param in  The input stream to read the schema from.
    * @return  The freshly built Schema.
-   * @throws IOException if there was trouble reading the contents
-   * @throws JsonParseException if the contents are invalid
+   * @throws IOException if there was trouble reading the contents or they are invalid
    * @deprecated use {@link Schema.Parser} instead.
    */
   public static Schema parse(InputStream in) throws IOException {
@@ -1081,7 +1145,7 @@ public abstract class Schema extends JsonProperties {
     return new Parser().setValidate(validate).parse(jsonSchema);
   }
 
-  static final Map<String,Type> PRIMITIVES = new HashMap<String,Type>();
+  static final Map<String,Type> PRIMITIVES = new HashMap<>();
   static {
     PRIMITIVES.put("string",  Type.STRING);
     PRIMITIVES.put("bytes",   Type.BYTES);
@@ -1129,14 +1193,14 @@ public abstract class Schema extends JsonProperties {
       return super.put(name, schema);
     }
   }
-  
+
   private static ThreadLocal<Boolean> validateNames
     = new ThreadLocal<Boolean>() {
     @Override protected Boolean initialValue() {
       return true;
     }
   };
-    
+
   private static String validateName(String name) {
     if (!validateNames.get()) return name;        // not validating names
     int length = name.length();
@@ -1156,10 +1220,10 @@ public abstract class Schema extends JsonProperties {
   private static final ThreadLocal<Boolean> VALIDATE_DEFAULTS
     = new ThreadLocal<Boolean>() {
     @Override protected Boolean initialValue() {
-      return false;
+      return true;
     }
   };
-    
+
   private static JsonNode validateDefault(String fieldName, Schema schema,
                                           JsonNode defaultValue) {
     if (VALIDATE_DEFAULTS.get() && (defaultValue != null)
@@ -1175,7 +1239,7 @@ public abstract class Schema extends JsonProperties {
     if (defaultValue == null)
       return false;
     switch (schema.getType()) {
-    case STRING:  
+    case STRING:
     case BYTES:
     case ENUM:
     case FIXED:
@@ -1222,8 +1286,11 @@ public abstract class Schema extends JsonProperties {
 
   /** @see #parse(String) */
   static Schema parse(JsonNode schema, Names names) {
+    if (schema == null) {
+      throw new SchemaParseException("Cannot parse <null> schema");
+    }
     if (schema.isTextual()) {                     // name
-      Schema result = names.get(schema.getTextValue());
+      Schema result = names.get(schema.textValue());
       if (result == null)
         throw new SchemaParseException("Undefined name: "+schema);
       return result;
@@ -1248,7 +1315,7 @@ public abstract class Schema extends JsonProperties {
       if (PRIMITIVES.containsKey(type)) {         // primitive
         result = create(PRIMITIVES.get(type));
       } else if (type.equals("record") || type.equals("error")) { // record
-        List<Field> fields = new ArrayList<Field>();
+        List<Field> fields = new ArrayList<>();
         result = new RecordSchema(name, doc, type.equals("error"));
         if (name != null) names.add(result);
         JsonNode fieldsNode = schema.get("fields");
@@ -1261,7 +1328,7 @@ public abstract class Schema extends JsonProperties {
           if (fieldTypeNode == null)
             throw new SchemaParseException("No field type: "+field);
           if (fieldTypeNode.isTextual()
-              && names.get(fieldTypeNode.getTextValue()) == null)
+              && names.get(fieldTypeNode.textValue()) == null)
             throw new SchemaParseException
               (fieldTypeNode+" is not a defined name."
                +" The type of the \""+fieldName+"\" field must be"
@@ -1270,17 +1337,17 @@ public abstract class Schema extends JsonProperties {
           Field.Order order = Field.Order.ASCENDING;
           JsonNode orderNode = field.get("order");
           if (orderNode != null)
-            order = Field.Order.valueOf(orderNode.getTextValue().toUpperCase(Locale.ENGLISH));
+            order = Field.Order.valueOf(orderNode.textValue().toUpperCase(Locale.ENGLISH));
           JsonNode defaultValue = field.get("default");
           if (defaultValue != null
               && (Type.FLOAT.equals(fieldSchema.getType())
                   || Type.DOUBLE.equals(fieldSchema.getType()))
               && defaultValue.isTextual())
             defaultValue =
-              new DoubleNode(Double.valueOf(defaultValue.getTextValue()));
+              new DoubleNode(Double.valueOf(defaultValue.textValue()));
           Field f = new Field(fieldName, fieldSchema,
                               fieldDoc, defaultValue, order);
-          Iterator<String> i = field.getFieldNames();
+          Iterator<String> i = field.fieldNames();
           while (i.hasNext()) {                       // add field props
             String prop = i.next();
             if (!FIELD_RESERVED.contains(prop))
@@ -1294,10 +1361,14 @@ public abstract class Schema extends JsonProperties {
         JsonNode symbolsNode = schema.get("symbols");
         if (symbolsNode == null || !symbolsNode.isArray())
           throw new SchemaParseException("Enum has no symbols: "+schema);
-        LockableArrayList<String> symbols = new LockableArrayList<String>();
+        LockableArrayList<String> symbols = new LockableArrayList<>(symbolsNode.size());
         for (JsonNode n : symbolsNode)
-          symbols.add(n.getTextValue());
-        result = new EnumSchema(name, doc, symbols);
+          symbols.add(n.textValue());
+        JsonNode enumDefault = schema.get("default");
+        String defaultSymbol = null;
+        if (enumDefault != null)
+          defaultSymbol = enumDefault.textValue();
+        result = new EnumSchema(name, doc, symbols, defaultSymbol);
         if (name != null) names.add(result);
       } else if (type.equals("array")) {          // array
         JsonNode itemsNode = schema.get("items");
@@ -1313,14 +1384,19 @@ public abstract class Schema extends JsonProperties {
         JsonNode sizeNode = schema.get("size");
         if (sizeNode == null || !sizeNode.isInt())
           throw new SchemaParseException("Invalid or no size: "+schema);
-        result = new FixedSchema(name, doc, sizeNode.getIntValue());
+        result = new FixedSchema(name, doc, sizeNode.intValue());
         if (name != null) names.add(result);
       } else
         throw new SchemaParseException("Type not supported: "+type);
-      Iterator<String> i = schema.getFieldNames();
+      Iterator<String> i = schema.fieldNames();
+
+      Set reserved = SCHEMA_RESERVED;
+      if (type.equals("enum")) {
+        reserved = ENUM_RESERVED;
+      }
       while (i.hasNext()) {                       // add properties
         String prop = i.next();
-        if (!SCHEMA_RESERVED.contains(prop))      // ignore reserved
+        if (!reserved.contains(prop))      // ignore reserved
           result.addProp(prop, schema.get(prop));
       }
       // parse logical type if present
@@ -1335,7 +1411,7 @@ public abstract class Schema extends JsonProperties {
       return result;
     } else if (schema.isArray()) {                // union
       LockableArrayList<Schema> types =
-        new LockableArrayList<Schema>(schema.size());
+        new LockableArrayList<>(schema.size());
       for (JsonNode typeNode : schema)
         types.add(parse(typeNode, names));
       return new UnionSchema(types);
@@ -1344,19 +1420,19 @@ public abstract class Schema extends JsonProperties {
     }
   }
 
-  private static Set<String> parseAliases(JsonNode node) {
+  static Set<String> parseAliases(JsonNode node) {
     JsonNode aliasesNode = node.get("aliases");
     if (aliasesNode == null)
       return null;
     if (!aliasesNode.isArray())
       throw new SchemaParseException("aliases not an array: "+node);
-    Set<String> aliases = new LinkedHashSet<String>();
+    Set<String> aliases = new LinkedHashSet<>();
     for (JsonNode aliasNode : aliasesNode) {
       if (!aliasNode.isTextual())
         throw new SchemaParseException("alias not a string: "+aliasNode);
-      aliases.add(aliasNode.getTextValue());
+      aliases.add(aliasNode.textValue());
     }
-    return aliases;  
+    return aliases;
   }
 
   /** Extracts text value associated to key from the container JsonNode,
@@ -1378,15 +1454,10 @@ public abstract class Schema extends JsonProperties {
   /** Extracts text value associated to key from the container JsonNode. */
   private static String getOptionalText(JsonNode container, String key) {
     JsonNode jsonNode = container.get(key);
-    return jsonNode != null ? jsonNode.getTextValue() : null;
+    return jsonNode != null ? jsonNode.textValue() : null;
   }
 
-  /**
-   * Parses a string as Json.
-   * @deprecated use {@link org.apache.avro.data.Json#parseJson(String)}
-   */
-  @Deprecated
-  public static JsonNode parseJson(String s) {
+  static JsonNode parseJson(String s) {
     try {
       return MAPPER.readTree(FACTORY.createJsonParser(new StringReader(s)));
     } catch (JsonParseException e) {
@@ -1394,6 +1465,13 @@ public abstract class Schema extends JsonProperties {
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
+  }
+
+  /**
+   * Parses the specified json string to an object.
+   */
+  public static Object parseJsonToObject(String s) {
+    return JacksonUtils.toObject(parseJson(s));
   }
 
   /** Rewrite a writer's schema using the aliases from a reader's schema.  This
@@ -1405,15 +1483,15 @@ public abstract class Schema extends JsonProperties {
     if (writer == reader) return writer;          // same schema
 
     // create indexes of names
-    Map<Schema,Schema> seen = new IdentityHashMap<Schema,Schema>(1);
-    Map<Name,Name> aliases = new HashMap<Name, Name>(1);
+    Map<Schema,Schema> seen = new IdentityHashMap<>(1);
+    Map<Name,Name> aliases = new HashMap<>(1);
     Map<Name,Map<String,String>> fieldAliases =
-      new HashMap<Name, Map<String,String>>(1);
+      new HashMap<>(1);
     getAliases(reader, seen, aliases, fieldAliases);
 
     if (aliases.size() == 0 && fieldAliases.size() == 0)
       return writer;                              // no aliases
-    
+
     seen.clear();
     return applyAliases(writer, seen, aliases, fieldAliases);
   }
@@ -1431,12 +1509,12 @@ public abstract class Schema extends JsonProperties {
         name = aliases.get(name);
       result = Schema.createRecord(name.full, s.getDoc(), null, s.isError());
       seen.put(s, result);
-      List<Field> newFields = new ArrayList<Field>();
+      List<Field> newFields = new ArrayList<>();
       for (Field f : s.getFields()) {
         Schema fSchema = applyAliases(f.schema, seen, aliases, fieldAliases);
         String fName = getFieldAlias(name, f.name, fieldAliases);
         Field newF = new Field(fName, fSchema, f.doc, f.defaultValue, f.order);
-        newF.props.putAll(f.props);               // copy props
+        newF.putAll(f);               // copy props
         newFields.add(newF);
       }
       result.setFields(newFields);
@@ -1444,7 +1522,7 @@ public abstract class Schema extends JsonProperties {
     case ENUM:
       if (aliases.containsKey(name))
         result = Schema.createEnum(aliases.get(name).full, s.getDoc(), null,
-                                   s.getEnumSymbols());
+                                   s.getEnumSymbols(), s.getEnumDefault());
       break;
     case ARRAY:
       Schema e = applyAliases(s.getElementType(), seen, aliases, fieldAliases);
@@ -1457,7 +1535,7 @@ public abstract class Schema extends JsonProperties {
         result = Schema.createMap(v);
       break;
     case UNION:
-      List<Schema> types = new ArrayList<Schema>();
+      List<Schema> types = new ArrayList<>();
       for (Schema branch : s.getTypes())
         types.add(applyAliases(branch, seen, aliases, fieldAliases));
       result = Schema.createUnion(types);
@@ -1469,7 +1547,7 @@ public abstract class Schema extends JsonProperties {
       break;
     }
     if (result != s)
-      result.props.putAll(s.props);        // copy props
+      result.putAll(s);        // copy props
     return result;
   }
 
@@ -1495,7 +1573,7 @@ public abstract class Schema extends JsonProperties {
             Map<String,String> recordAliases = fieldAliases.get(record.name);
             if (recordAliases == null)
               fieldAliases.put(record.name,
-                               recordAliases = new HashMap<String,String>());
+                               recordAliases = new HashMap<>());
             recordAliases.put(fieldAlias, field.name);
           }
         getAliases(field.schema, seen, aliases, fieldAliases);
@@ -1533,13 +1611,13 @@ public abstract class Schema extends JsonProperties {
    * called on it.
    * @param <E>
    */
-  
+
   /*
    * This class keeps a boolean variable <tt>locked</tt> which is set
    * to <tt>true</tt> in the lock() method. It's legal to call
    * lock() any number of times. Any lock() other than the first one
    * is a no-op.
-   * 
+   *
    * This class throws <tt>IllegalStateException</tt> if a mutating
    * operation is performed after being locked. Since modifications through
    * iterator also use the list's mutating operations, this effectively
@@ -1548,7 +1626,7 @@ public abstract class Schema extends JsonProperties {
   static class LockableArrayList<E> extends ArrayList<E> {
     private static final long serialVersionUID = 1L;
     private boolean locked = false;
-    
+
     public LockableArrayList() {
     }
 
@@ -1580,42 +1658,42 @@ public abstract class Schema extends JsonProperties {
       ensureUnlocked();
       return super.add(e);
     }
-    
+
     public boolean remove(Object o) {
       ensureUnlocked();
       return super.remove(o);
     }
-    
+
     public E remove(int index) {
       ensureUnlocked();
       return super.remove(index);
     }
-      
+
     public boolean addAll(Collection<? extends E> c) {
       ensureUnlocked();
       return super.addAll(c);
     }
-    
+
     public boolean addAll(int index, Collection<? extends E> c) {
       ensureUnlocked();
       return super.addAll(index, c);
     }
-    
+
     public boolean removeAll(Collection<?> c) {
       ensureUnlocked();
       return super.removeAll(c);
     }
-    
+
     public boolean retainAll(Collection<?> c) {
       ensureUnlocked();
       return super.retainAll(c);
     }
-    
+
     public void clear() {
       ensureUnlocked();
       super.clear();
     }
 
   }
-  
+
 }

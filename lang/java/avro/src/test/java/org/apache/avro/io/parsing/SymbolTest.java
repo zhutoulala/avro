@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
+
 import junit.framework.Assert;
 import org.apache.avro.Schema;
 import org.junit.Test;
@@ -51,8 +52,8 @@ public class SymbolTest {
     Schema schema = new Schema.Parser().parse(SCHEMA);
 
     Symbol root = Symbol.root(new ResolvingGrammarGenerator()
-        .generate(schema, schema, new HashMap<ValidatingGrammarGenerator.LitS, Symbol>()));
-    validateNonNull(root, new HashSet<Symbol>());
+        .generate(schema, schema, new HashMap<>()));
+    validateNonNull(root, new HashSet<>());
   }
 
   private static void validateNonNull(final Symbol symb, Set<Symbol> seen) {

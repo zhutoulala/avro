@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -50,11 +50,23 @@ import org.apache.avro.io.BinaryDecoder;
 public class SpecificData extends GenericData {
 
   private static final SpecificData INSTANCE = new SpecificData();
-  
+
   private static final Class<?>[] NO_ARG = new Class[]{};
   private static final Class<?>[] SCHEMA_ARG = new Class[]{Schema.class};
-  private static final Map<Class,Constructor> CTOR_CACHE =
-    new ConcurrentHashMap<Class,Constructor>();
+  private static final ClassValue<Constructor> CTOR_CACHE = new ClassValue<Constructor>() {
+    @Override
+    protected Constructor computeValue(Class<?> c) {
+      boolean useSchema = SchemaConstructable.class.isAssignableFrom(c);
+      try {
+        Constructor meth = c.getDeclaredConstructor(useSchema ? SCHEMA_ARG : NO_ARG);
+        meth.setAccessible(true);
+        return meth;
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }
+
+  };
 
   public static final String CLASS_PROP = "java-class";
   public static final String KEY_CLASS_PROP = "java-key-class";
@@ -65,7 +77,7 @@ public class SpecificData extends GenericData {
    * combined with the boolean and null literals.
    * combined with the classnames used internally in the generated avro code.
    */
-  public static final Set<String> RESERVED_WORDS = new HashSet<String>
+  public static final Set<String> RESERVED_WORDS = new HashSet<>
     (Arrays.asList(new String[] {
         "abstract", "assert", "boolean", "break", "byte", "case", "catch",
         "char", "class", "const", "continue", "default", "do", "double",
@@ -85,7 +97,7 @@ public class SpecificData extends GenericData {
    * that wouldn't be otherwise correctly readable or writable should be added
    * here, e.g., those without a no-arg constructor or those whose fields are
    * all transient. */
-  protected Set<Class> stringableClasses = new HashSet<Class>();
+  protected Set<Class> stringableClasses = new HashSet<>();
   {
     stringableClasses.add(java.math.BigDecimal.class);
     stringableClasses.add(java.math.BigInteger.class);
@@ -101,7 +113,7 @@ public class SpecificData extends GenericData {
   public SpecificData(ClassLoader classLoader) {
     super(classLoader);
   }
-  
+
   @Override
   public DatumReader createDatumReader(Schema schema) {
     return new SpecificDatumReader(schema, schema, this);
@@ -119,6 +131,22 @@ public class SpecificData extends GenericData {
 
   /** Return the singleton instance. */
   public static SpecificData get() { return INSTANCE; }
+
+  private boolean useCustomCoderFlag
+    = Boolean.parseBoolean(System.getProperty("org.apache.avro.specific.use_custom_coders","false"));
+
+  /** Retrieve the current value of the custom-coders feature flag.
+    * Defaults to <code>true</code>, but this default can be overriden
+    * using the system property
+    * <code>org.apache.avro.specific.use_custom_coders</code>, and can
+    * be set dynamically by {@link useCustomCoders}.  See <a
+    * href="https://avro.apache.org/docs/current/gettingstartedjava.html#Beta+feature:+Generating+faster+code"Getting started with Java</a> for more about this
+    * feature flag. */
+  public boolean useCustomCoders() { return useCustomCoderFlag; }
+
+  /** Dynamically set the value of the custom-coder feature flag.
+   *  See {@link useCustomCoders}. */
+  public void setCustomCoders(boolean flag) { useCustomCoderFlag = flag; }
 
   @Override
   protected boolean isEnum(Object datum) {
@@ -141,7 +169,7 @@ public class SpecificData extends GenericData {
       : super.getEnumSchema(datum);
   }
 
-  private Map<String,Class> classCache = new ConcurrentHashMap<String,Class>();
+  private Map<String,Class> classCache = new ConcurrentHashMap<>();
 
   private static final Class NO_CLASS = new Object(){}.getClass();
   private static final Schema NULL_SCHEMA = Schema.create(Schema.Type.NULL);
@@ -159,7 +187,11 @@ public class SpecificData extends GenericData {
         try {
           c = ClassUtils.forName(getClassLoader(), getClassName(schema));
         } catch (ClassNotFoundException e) {
-          c = NO_CLASS;
+          try {                                   // nested class?
+            c = ClassUtils.forName(getClassLoader(), getNestedClassName(schema));
+          } catch (ClassNotFoundException ex) {
+            c = NO_CLASS;
+          }
         }
         classCache.put(name, c);
       }
@@ -203,21 +235,47 @@ public class SpecificData extends GenericData {
     String name = schema.getName();
     if (namespace == null || "".equals(namespace))
       return name;
-    String dot = namespace.endsWith("$") ? "" : ".";
+    String dot = namespace.endsWith("$") ? "" : "."; // back-compatibly handle $
     return namespace + dot + name;
   }
 
-  private final WeakHashMap<java.lang.reflect.Type,Schema> schemaCache =
-    new WeakHashMap<java.lang.reflect.Type,Schema>();
+  private String getNestedClassName(Schema schema) {
+    String namespace = schema.getNamespace();
+    String name = schema.getName();
+    if (namespace == null || "".equals(namespace))
+      return name;
+    return namespace + "$" + name;
+  }
+
+  // cache for schemas created from Class objects.  Use ClassValue to avoid
+  // locking classloaders and is GC and thread safe.
+  private final ClassValue<Schema> schemaClassCache = new ClassValue<Schema>() {
+    @Override
+    protected Schema computeValue(Class<?> type) {
+      return createSchema(type, new LinkedHashMap<>());
+    }
+  };
+  // for non-class objects, use a WeakHashMap, but this needs a sync block around it
+  private final Map<java.lang.reflect.Type, Schema> schemaTypeCache = new WeakHashMap<>();
 
   /** Find the schema for a Java type. */
   public Schema getSchema(java.lang.reflect.Type type) {
-    Schema schema = schemaCache.get(type);
-    if (schema == null) {
-      schema = createSchema(type, new LinkedHashMap<String,Schema>());
-      schemaCache.put(type, schema);
+    try {
+      if (type instanceof Class) {
+        return schemaClassCache.get((Class<?>)type);
+      }
+      synchronized (schemaTypeCache) {
+        Schema s = schemaTypeCache.get(type);
+        if (s == null) {
+          s = createSchema(type, new LinkedHashMap<>());
+          schemaTypeCache.put(type, s);
+        }
+        return s;
+      }
+    } catch (Exception e) {
+      throw (e instanceof AvroRuntimeException) ?
+          (AvroRuntimeException)e : new AvroRuntimeException(e);
     }
-    return schema;
   }
 
   /** Create the schema for a Java type. */
@@ -293,7 +351,7 @@ public class SpecificData extends GenericData {
     return super.getSchemaName(datum);
   }
 
-  /** True iff a class should be serialized with toString(). */ 
+  /** True iff a class should be serialized with toString(). */
   protected boolean isStringable(Class<?> c) {
     return stringableClasses.contains(c);
   }
@@ -324,7 +382,7 @@ public class SpecificData extends GenericData {
       return super.compare(o1, o2, s, eq);
     }
   }
-  
+
   /** Create an instance of a class.  If the class implements {@link
    * SchemaConstructable}, call a constructor with a {@link
    * org.apache.avro.Schema} parameter, otherwise use a no-arg constructor. */
@@ -334,25 +392,20 @@ public class SpecificData extends GenericData {
     Object result;
     try {
       Constructor meth = (Constructor)CTOR_CACHE.get(c);
-      if (meth == null) {
-        meth = c.getDeclaredConstructor(useSchema ? SCHEMA_ARG : NO_ARG);
-        meth.setAccessible(true);
-        CTOR_CACHE.put(c, meth);
-      }
       result = meth.newInstance(useSchema ? new Object[]{s} : (Object[])null);
     } catch (Exception e) {
       throw new RuntimeException(e);
     }
     return result;
   }
-  
+
   @Override
   public Object createFixed(Object old, Schema schema) {
     Class c = getClass(schema);
     if (c == null) return super.createFixed(old, schema); // punt to generic
     return c.isInstance(old) ? old : newInstance(c, schema);
   }
-  
+
   @Override
   public Object newRecord(Object old, Schema schema) {
     Class c = getClass(schema);
